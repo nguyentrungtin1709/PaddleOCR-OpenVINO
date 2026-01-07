@@ -1,0 +1,79 @@
+# ========== Auto detect text files ==========
+* text=auto
+
+# ========== Source code ==========
+*.py text diff=python
+*.pyw text diff=python
+*.pyx text diff=python
+*.pxd text diff=python
+*.pxi text diff=python
+
+# ========== Configuration ==========
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.xml text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+*.conf text eol=lf
+
+# ========== Documentation ==========
+*.md text diff=markdown
+*.txt text
+*.rst text
+LICENSE text
+AUTHORS text
+CHANGELOG text
+CONTRIBUTING text
+
+# ========== Web ==========
+*.html text diff=html
+*.css text diff=css
+*.js text
+*.qss text
+
+# ========== Shell scripts ==========
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
+
+# ========== Windows scripts ==========
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# ========== Images ==========
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text
+*.bmp binary
+*.tiff binary
+*.webp binary
+
+# ========== ML Models (Binary Files) ==========
+*.onnx binary
+*.pt binary
+*.pth binary
+*.h5 binary
+*.pb binary
+*.tflite binary
+*.weights binary
+
+# ========== Archives ==========
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+*.rar binary
+
+# ========== Requirements ==========
+requirements*.txt text
+
+# ========== Exclude from export ==========
+.gitattributes export-ignore
+.gitignore export-ignore
+.github export-ignore

@@ -1,0 +1,133 @@
+# ========== Python ==========
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytest_debug.log
+
+# Translations
+*.mo
+*.pot
+
+# ========== Virtual Environment ==========
+.venv/
+venv/
+ENV/
+env/
+.env
+.python-version
+
+# ========== IDE / Editor ==========
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# Jupyter (local checkpoints)
+.ipynb_checkpoints/
+
+# ========== OS Generated ==========
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ========== Project Specific ==========
+# Output directories (generated at runtime)
+output/*
+logs/*
+
+# Temporary files
+temp/
+*.tmp
+*.temp
+*.log
+
+# Model weights (large files - use Git LFS or separate storage)
+# Uncomment if you don't want to track models in git
+# models/*.pt
+# models/*.onnx
+
+# ========== Secrets ==========
+*.pem
+*.key
+secrets.json
+credentials.json
