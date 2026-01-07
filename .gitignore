@@ -131,3 +131,7 @@ temp/
 *.key
 secrets.json
 credentials.json
+
+# Models archive
+archive/*
+!archive/.gitkeep

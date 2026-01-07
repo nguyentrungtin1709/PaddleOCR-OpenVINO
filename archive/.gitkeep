@@ -1,0 +1,5 @@
+# Place PP-OCRv5 model archives here
+
+Download models from:
+- Detection: https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_det_infer.tar
+- Recognition: https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0//PP-OCRv5_mobile_rec_infer.tar

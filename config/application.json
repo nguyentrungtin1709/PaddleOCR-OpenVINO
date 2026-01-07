@@ -1,0 +1,56 @@
+{
+    "models": {
+        "_description": "Paths to converted ONNX models",
+        "detectionModelPath": "models/det/inference.onnx",
+        "recognitionModelPath": "models/rec/inference.onnx",
+        "characterDictPath": "fonts/ppocr_keys_v1.txt"
+    },
+    "detection": {
+        "_description": "Text detection configuration (DB algorithm)",
+        "limitType": "max",
+        "_comment_limitType": "Limit type: 'max' = longest side <= limitSideLen, 'min' = shortest side >= limitSideLen",
+        "limitSideLen": 640,
+        "_comment_limitSideLen": "Image side length limit (pixels). Higher value = more detail but slower",
+        "thresh": 0.15,
+        "_comment_thresh": "Pixel detection threshold. Lower = more detections but may include noise",
+        "boxThresh": 0.15,
+        "_comment_boxThresh": "Box threshold. Only keep boxes with average score > this value",
+        "unclipRatio": 2.0,
+        "_comment_unclipRatio": "Box expansion ratio. Higher = wider boxes"
+    },
+    "recognition": {
+        "_description": "Text recognition configuration",
+        "imageHeight": 48,
+        "_comment_imageHeight": "Input image height for recognition model",
+        "maxWidth": 320,
+        "_comment_maxWidth": "Maximum width after resize",
+        "batchSize": 6,
+        "_comment_batchSize": "Number of text crops to process per batch",
+        "scoreThresh": 0.3,
+        "_comment_scoreThresh": "Score threshold. Only keep results with score > this value"
+    },
+    "openvino": {
+        "_description": "OpenVINO Runtime configuration",
+        "device": "CPU",
+        "_comment_device": "Inference device: 'CPU', 'GPU', 'AUTO'",
+        "numThreads": 2,
+        "_comment_numThreads": "Number of CPU threads. 0 = use all available cores",
+        "numStreams": 1,
+        "_comment_numStreams": "Number of parallel inference streams. 1 = lowest latency",
+        "performanceHint": "LATENCY",
+        "_comment_performanceHint": "'LATENCY' = optimize for single request, 'THROUGHPUT' = optimize for multiple requests",
+        "enableHyperThreading": false,
+        "_comment_enableHyperThreading": "Use hyper-threading. false = use physical cores only",
+        "enableCpuPinning": true,
+        "_comment_enableCpuPinning": "Pin threads to CPU cores. Disable if running multiple workloads",
+        "cacheDir": "",
+        "_comment_cacheDir": "Model cache directory. Empty = no caching"
+    },
+    "output": {
+        "_description": "Output configuration",
+        "saveVisualization": true,
+        "_comment_saveVisualization": "Save visualization images with bounding boxes",
+        "dropScoreThreshold": 0.5,
+        "_comment_dropScoreThreshold": "Threshold to filter out low-score results in visualization"
+    }
+}
