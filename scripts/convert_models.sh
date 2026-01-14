@@ -6,9 +6,9 @@
 # them to ONNX format for use with OpenVINO.
 #
 # Prerequisites:
-#   - Python 3.8+
-#   - paddle2onnx >= 1.0.0
-#   - PaddlePaddle >= 2.5.0
+#   - Python 3.11.9
+#   - paddle2onnx 2.1.0
+#   - PaddlePaddle 3.3.0
 #
 # Usage:
 #   ./scripts/convert_models.sh
@@ -23,18 +23,19 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # Directories
 ARCHIVE_DIR="$PROJECT_ROOT/archive"
 MODELS_DIR="$PROJECT_ROOT/models"
+FONTS_DIR="$PROJECT_ROOT/fonts"
 TEMP_DIR="$PROJECT_ROOT/temp_models"
 
 # Model archive files
 DET_ARCHIVE="PP-OCRv5_mobile_det_infer.tar"
 REC_ARCHIVE="PP-OCRv5_mobile_rec_infer.tar"
 
-# Output model names
-DET_ONNX="ch_PP-OCRv5_det_infer.onnx"
-REC_ONNX="ch_PP-OCRv5_rec_infer.onnx"
+# Output model names (chuẩn theo config)
+DET_ONNX="PP-OCRv5_mobile_det_infer.onnx"
+REC_ONNX="PP-OCRv5_mobile_rec_infer.onnx"
 
-# ONNX opset version (12 is recommended for OpenVINO 2024.0.0+)
-OPSET_VERSION=12
+# ONNX opset version (11 is stable and recommended by official PaddleOCR docs)
+OPSET_VERSION=11
 
 echo "============================================"
 echo "PP-OCRv5 Model Conversion Script"
@@ -43,7 +44,43 @@ echo ""
 echo "Project root: $PROJECT_ROOT"
 echo "Archive directory: $ARCHIVE_DIR"
 echo "Output directory: $MODELS_DIR"
+echo "ONNX Opset version: $OPSET_VERSION"
 echo ""
+
+# Function to detect model filename
+get_model_filename() {
+    local model_dir="$1"
+    [ -f "$model_dir/inference.pdmodel" ] && echo "inference.pdmodel" && return 0
+    [ -f "$model_dir/inference.json" ] && echo "inference.json" && return 0
+    echo "ERROR: No model file found in $model_dir" >&2
+    exit 1
+}
+
+# Function to convert Paddle model to ONNX
+convert_paddle_to_onnx() {
+    local model_dir="$1"
+    local output_path="$2"
+    local opset_version="$3"
+    local model_filename=$(get_model_filename "$model_dir")
+    
+    echo "  Model: $model_filename -> $output_path"
+    
+    paddle2onnx \
+        --model_dir "$model_dir" \
+        --model_filename "$model_filename" \
+        --params_filename "inference.pdiparams" \
+        --save_file "$output_path" \
+        --opset_version "$opset_version" \
+        --enable_onnx_checker True
+    
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Conversion failed!"
+        return 1
+    fi
+    
+    echo "  SUCCESS: $(du -h "$output_path" | cut -f1)"
+    return 0
+}
 
 # Check if archive directory exists
 if [ ! -d "$ARCHIVE_DIR" ]; then
@@ -70,16 +107,18 @@ if [ ! -f "$ARCHIVE_DIR/$REC_ARCHIVE" ]; then
     exit 1
 fi
 
-# Check if paddle2onnx is installed
-if ! python -c "import paddle2onnx" 2>/dev/null; then
-    echo "ERROR: paddle2onnx is not installed"
-    echo "Install with: pip install paddle2onnx>=1.0.0"
+# Check if paddle2onnx is available
+if ! command -v paddle2onnx &> /dev/null; then
+    echo "ERROR: paddle2onnx not found. Install with: pip install paddle2onnx>=1.0.0"
     exit 1
 fi
+echo "paddle2onnx: OK"
 
 # Create directories
 echo "Creating directories..."
-mkdir -p "$MODELS_DIR"
+mkdir -p "$MODELS_DIR/det"
+mkdir -p "$MODELS_DIR/rec"
+mkdir -p "$FONTS_DIR"
 mkdir -p "$TEMP_DIR"
 
 # Extract detection model
@@ -92,20 +131,14 @@ DET_DIR=$(find "$TEMP_DIR" -type d -name "*det*" | head -1)
 if [ -z "$DET_DIR" ]; then
     DET_DIR="$TEMP_DIR/PP-OCRv5_mobile_det_infer"
 fi
-echo "Detection model directory: $DET_DIR"
+echo "Detection model: $DET_DIR"
 
 # Convert detection model to ONNX
-echo ""
-echo "Converting detection model to ONNX..."
-python -m paddle2onnx.convert \
-    --model_dir "$DET_DIR" \
-    --model_filename "inference.json" \
-    --params_filename "inference.pdiparams" \
-    --save_file "$MODELS_DIR/$DET_ONNX" \
-    --opset_version $OPSET_VERSION \
-    --enable_onnx_checker True
-
-echo "Detection model saved to: $MODELS_DIR/$DET_ONNX"
+echo "Converting detection model..."
+if ! convert_paddle_to_onnx "$DET_DIR" "$MODELS_DIR/det/$DET_ONNX" "$OPSET_VERSION"; then
+    echo "ERROR: Detection model conversion failed!"
+    exit 1
+fi
 
 # Extract recognition model
 echo ""
@@ -117,20 +150,14 @@ REC_DIR=$(find "$TEMP_DIR" -type d -name "*rec*" | head -1)
 if [ -z "$REC_DIR" ]; then
     REC_DIR="$TEMP_DIR/PP-OCRv5_mobile_rec_infer"
 fi
-echo "Recognition model directory: $REC_DIR"
+echo "Recognition model: $REC_DIR"
 
 # Convert recognition model to ONNX
-echo ""
-echo "Converting recognition model to ONNX..."
-python -m paddle2onnx.convert \
-    --model_dir "$REC_DIR" \
-    --model_filename "inference.json" \
-    --params_filename "inference.pdiparams" \
-    --save_file "$MODELS_DIR/$REC_ONNX" \
-    --opset_version $OPSET_VERSION \
-    --enable_onnx_checker True
-
-echo "Recognition model saved to: $MODELS_DIR/$REC_ONNX"
+echo "Converting recognition model..."
+if ! convert_paddle_to_onnx "$REC_DIR" "$MODELS_DIR/rec/$REC_ONNX" "$OPSET_VERSION"; then
+    echo "ERROR: Recognition model conversion failed!"
+    exit 1
+fi
 
 # Clean up temporary directory
 echo ""
@@ -138,7 +165,7 @@ echo "Cleaning up temporary files..."
 rm -rf "$TEMP_DIR"
 
 # Download character dictionary if not exists
-DICT_FILE="$MODELS_DIR/ppocr_keys_v1.txt"
+DICT_FILE="$FONTS_DIR/ppocr_keys_v1.txt"
 if [ ! -f "$DICT_FILE" ]; then
     echo ""
     echo "Downloading character dictionary..."
@@ -152,8 +179,8 @@ echo "============================================"
 echo "Conversion completed successfully!"
 echo "============================================"
 echo ""
-echo "Detection model:  $MODELS_DIR/$DET_ONNX"
-echo "Recognition model: $MODELS_DIR/$REC_ONNX"
+echo "Detection model:  $MODELS_DIR/det/$DET_ONNX"
+echo "Recognition model: $MODELS_DIR/rec/$REC_ONNX"
 echo "Character dict:   $DICT_FILE"
 echo ""
 echo "You can now run the OCR pipeline:"

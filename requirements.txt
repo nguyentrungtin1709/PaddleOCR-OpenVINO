@@ -2,9 +2,9 @@
 openvino>=2024.0.0
 
 # PaddlePaddle and PaddleOCR (for model conversion)
-paddlepaddle>=2.5.0
+paddlepaddle>=3.0.0
 paddleocr>=2.7.0
-paddle2onnx>=1.0.0
+paddle2onnx>=2.1.0
 
 # Image processing and utilities
 opencv-python>=4.8.0

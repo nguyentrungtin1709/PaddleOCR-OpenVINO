@@ -7,9 +7,9 @@
     them to ONNX format for use with OpenVINO.
 
 .PREREQUISITES
-    - Python 3.8+
-    - paddle2onnx >= 1.0.0
-    - PaddlePaddle >= 2.5.0
+    - Python 3.11.9
+    - paddle2onnx 2.1.0
+    - PaddlePaddle 3.3.0
 
 .EXAMPLE
     .\scripts\convert_models.ps1
@@ -24,18 +24,19 @@ $ProjectRoot = Split-Path -Parent $ScriptDir
 # Directories
 $ArchiveDir = Join-Path $ProjectRoot "archive"
 $ModelsDir = Join-Path $ProjectRoot "models"
+$FontsDir = Join-Path $ProjectRoot "fonts"
 $TempDir = Join-Path $ProjectRoot "temp_models"
 
 # Model archive files
 $DetArchive = "PP-OCRv5_mobile_det_infer.tar"
 $RecArchive = "PP-OCRv5_mobile_rec_infer.tar"
 
-# Output model names
-$DetOnnx = "ch_PP-OCRv5_det_infer.onnx"
-$RecOnnx = "ch_PP-OCRv5_rec_infer.onnx"
+# Output model names (chuẩn theo config)
+$DetOnnx = "PP-OCRv5_mobile_det_infer.onnx"
+$RecOnnx = "PP-OCRv5_mobile_rec_infer.onnx"
 
-# ONNX opset version (12 is recommended for OpenVINO 2024.0.0+)
-$OpsetVersion = 12
+# ONNX opset version (11 is stable and recommended by official PaddleOCR docs)
+$OpsetVersion = 11
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "PP-OCRv5 Model Conversion Script" -ForegroundColor Cyan
@@ -44,7 +45,48 @@ Write-Host ""
 Write-Host "Project root: $ProjectRoot"
 Write-Host "Archive directory: $ArchiveDir"
 Write-Host "Output directory: $ModelsDir"
+Write-Host "ONNX Opset version: $OpsetVersion"
 Write-Host ""
+
+# Function to detect model filename (inference.pdmodel or inference.json)
+function Get-ModelFilename {
+    param ([string]$ModelDir)
+    
+    if (Test-Path (Join-Path $ModelDir "inference.pdmodel")) { return "inference.pdmodel" }
+    if (Test-Path (Join-Path $ModelDir "inference.json")) { return "inference.json" }
+    
+    Write-Host "ERROR: No model file found in $ModelDir" -ForegroundColor Red
+    exit 1
+}
+
+# Function to convert Paddle model to ONNX
+function Convert-PaddleToOnnx {
+    param (
+        [string]$ModelDir,
+        [string]$OutputPath,
+        [int]$OpsetVersion
+    )
+    
+    $modelFilename = Get-ModelFilename -ModelDir $ModelDir
+    Write-Host "  Model: $modelFilename -> $OutputPath"
+    
+    paddle2onnx `
+        --model_dir "$ModelDir" `
+        --model_filename "$modelFilename" `
+        --params_filename "inference.pdiparams" `
+        --save_file "$OutputPath" `
+        --opset_version $OpsetVersion `
+        --enable_onnx_checker True
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Conversion failed!" -ForegroundColor Red
+        return $false
+    }
+    
+    $fileSize = [math]::Round((Get-Item $OutputPath).Length / 1MB, 2)
+    Write-Host "  SUCCESS: $fileSize MB" -ForegroundColor Green
+    return $true
+}
 
 # Check if archive directory exists
 if (-not (Test-Path $ArchiveDir)) {
@@ -73,18 +115,20 @@ if (-not (Test-Path $RecArchivePath)) {
     exit 1
 }
 
-# Check if paddle2onnx is installed
-$paddle2onnxCheck = & python -c "import paddle2onnx; print('PADDLE2ONNX_OK')" 2>&1 | Out-String
-if ($paddle2onnxCheck -notlike "*PADDLE2ONNX_OK*") {
-    Write-Host "ERROR: paddle2onnx is not installed" -ForegroundColor Red
-    Write-Host "Install with: pip install paddle2onnx>=1.0.0"
+# Check if paddle2onnx CLI is available
+$paddle2onnxCli = Get-Command paddle2onnx -ErrorAction SilentlyContinue
+if ($null -eq $paddle2onnxCli) {
+    Write-Host "ERROR: paddle2onnx not found. Install with: pip install paddle2onnx>=1.0.0" -ForegroundColor Red
     exit 1
 }
-Write-Host "paddle2onnx check: OK" -ForegroundColor Green
+Write-Host "paddle2onnx: OK" -ForegroundColor Green
 
 # Create directories
 Write-Host "Creating directories..."
 New-Item -ItemType Directory -Path $ModelsDir -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $ModelsDir "det") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $ModelsDir "rec") -Force | Out-Null
+New-Item -ItemType Directory -Path $FontsDir -Force | Out-Null
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
 # Function to extract tar files
@@ -115,22 +159,18 @@ if ($null -eq $DetDir) {
 } else {
     $DetDir = $DetDir.FullName
 }
-Write-Host "Detection model directory: $DetDir"
+Write-Host "Detection model: $DetDir"
 
 # Convert detection model to ONNX
-Write-Host ""
-Write-Host "Converting detection model to ONNX..."
-$DetOutputPath = Join-Path $ModelsDir $DetOnnx
+Write-Host "Converting detection model..." -ForegroundColor Cyan
+$DetOutputPath = Join-Path (Join-Path $ModelsDir "det") $DetOnnx
 
-python -m paddle2onnx.convert `
-    --model_dir "$DetDir" `
-    --model_filename "inference.json" `
-    --params_filename "inference.pdiparams" `
-    --save_file "$DetOutputPath" `
-    --opset_version $OpsetVersion `
-    --enable_onnx_checker True
+$detSuccess = Convert-PaddleToOnnx -ModelDir $DetDir -OutputPath $DetOutputPath -OpsetVersion $OpsetVersion
 
-Write-Host "Detection model saved to: $DetOutputPath" -ForegroundColor Green
+if (-not $detSuccess) {
+    Write-Host "ERROR: Detection model conversion failed!" -ForegroundColor Red
+    exit 1
+}
 
 # Extract recognition model
 Write-Host ""
@@ -144,22 +184,18 @@ if ($null -eq $RecDir) {
 } else {
     $RecDir = $RecDir.FullName
 }
-Write-Host "Recognition model directory: $RecDir"
+Write-Host "Recognition model: $RecDir"
 
 # Convert recognition model to ONNX
-Write-Host ""
-Write-Host "Converting recognition model to ONNX..."
-$RecOutputPath = Join-Path $ModelsDir $RecOnnx
+Write-Host "Converting recognition model..." -ForegroundColor Cyan
+$RecOutputPath = Join-Path (Join-Path $ModelsDir "rec") $RecOnnx
 
-python -m paddle2onnx.convert `
-    --model_dir "$RecDir" `
-    --model_filename "inference.json" `
-    --params_filename "inference.pdiparams" `
-    --save_file "$RecOutputPath" `
-    --opset_version $OpsetVersion `
-    --enable_onnx_checker True
+$recSuccess = Convert-PaddleToOnnx -ModelDir $RecDir -OutputPath $RecOutputPath -OpsetVersion $OpsetVersion
 
-Write-Host "Recognition model saved to: $RecOutputPath" -ForegroundColor Green
+if (-not $recSuccess) {
+    Write-Host "ERROR: Recognition model conversion failed!" -ForegroundColor Red
+    exit 1
+}
 
 # Clean up temporary directory
 Write-Host ""
@@ -167,7 +203,7 @@ Write-Host "Cleaning up temporary files..."
 Remove-Item -Path $TempDir -Recurse -Force
 
 # Download character dictionary if not exists
-$DictFile = Join-Path $ModelsDir "ppocr_keys_v1.txt"
+$DictFile = Join-Path $FontsDir "ppocr_keys_v1.txt"
 if (-not (Test-Path $DictFile)) {
     Write-Host ""
     Write-Host "Downloading character dictionary..."
