@@ -28,11 +28,11 @@ TEMP_DIR="$PROJECT_ROOT/temp_models"
 
 # Model archive files
 DET_ARCHIVE="PP-OCRv5_mobile_det_infer.tar"
-REC_ARCHIVE="PP-OCRv5_mobile_rec_infer.tar"
+REC_ARCHIVE="en_PP-OCRv5_mobile_rec_infer.tar"
 
 # Output model names (chuẩn theo config)
 DET_ONNX="PP-OCRv5_mobile_det_infer.onnx"
-REC_ONNX="PP-OCRv5_mobile_rec_infer.onnx"
+REC_ONNX="en_PP-OCRv5_mobile_rec_infer.onnx"
 
 # ONNX opset version (11 is stable and recommended by official PaddleOCR docs)
 OPSET_VERSION=11
@@ -164,13 +164,13 @@ echo ""
 echo "Cleaning up temporary files..."
 rm -rf "$TEMP_DIR"
 
-# Download character dictionary if not exists
-DICT_FILE="$FONTS_DIR/ppocr_keys_v1.txt"
+# Download English character dictionary if not exists
+DICT_FILE="$FONTS_DIR/en_dict.txt"
 if [ ! -f "$DICT_FILE" ]; then
     echo ""
-    echo "Downloading character dictionary..."
+    echo "Downloading English character dictionary..."
     curl -L -o "$DICT_FILE" \
-        "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/ppocr_keys_v1.txt"
+        "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/release/2.7/ppocr/utils/en_dict.txt"
     echo "Character dictionary saved to: $DICT_FILE"
 fi
 

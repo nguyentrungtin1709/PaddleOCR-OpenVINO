@@ -1,17 +1,24 @@
 # OpenVINO Runtime
-openvino>=2024.0.0
+openvino==2025.4.1
 
 # PaddlePaddle and PaddleOCR (for model conversion)
-paddlepaddle>=3.0.0
-paddleocr>=2.7.0
-paddle2onnx>=2.1.0
+paddlepaddle==3.3.0
+paddleocr==3.3.2
+paddle2onnx==2.1.0
+
+# ONNX and optimization tools (auto-installed by paddle2onnx, pinned for reproducibility)
+onnx==1.17.0
+onnxruntime==1.23.2
+onnx_graphsurgeon==0.5.8
 
 # Image processing and utilities
-opencv-python>=4.8.0
-numpy>=1.24.0
-Pillow>=10.0.0
-pyclipper>=1.3.0
-shapely>=2.0.0
+opencv-python==4.12.0.88
+opencv-contrib-python==4.10.0.84
+numpy==2.2.6
+Pillow==12.1.0
+pyclipper==1.4.0
+shapely==2.1.2
 
-# CLI and logging
-tqdm>=4.66.0
+# CLI, logging and utilities
+tqdm==4.67.1
+colored==2.3.1

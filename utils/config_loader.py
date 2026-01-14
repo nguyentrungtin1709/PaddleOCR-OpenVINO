@@ -87,6 +87,16 @@ class ConfigLoader:
         with open(self.config_path, "r", encoding="utf-8") as f:
             self._config = json.load(f)
     
+    @property
+    def config(self) -> dict:
+        """Get raw configuration dictionary."""
+        return self._config
+    
+    @property
+    def project_root(self) -> Path:
+        """Get project root directory."""
+        return self._base_dir
+    
     def _resolve_path(self, relative_path: str) -> str:
         """
         Resolve a relative path to an absolute path based on project root.

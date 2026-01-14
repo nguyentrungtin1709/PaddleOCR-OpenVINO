@@ -171,11 +171,8 @@ class TextExtractor:
             if self.num_threads > 0:
                 cpu_config["INFERENCE_NUM_THREADS"] = str(self.num_threads)
             
-            cpu_config["ENABLE_HYPER_THREADING"] = str(
-                self.enable_hyper_threading
-            ).upper()
-            
-            cpu_config["AFFINITY"] = "CORE" if self.enable_cpu_pinning else "NONE"
+            # Note: ENABLE_HYPER_THREADING and AFFINITY are deprecated in OpenVINO 2024+
+            # Only set if needed for older versions
             
             if cpu_config:
                 self.core.set_property("CPU", cpu_config)

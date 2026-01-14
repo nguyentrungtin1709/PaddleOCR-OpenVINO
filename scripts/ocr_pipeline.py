@@ -195,16 +195,16 @@ def create_extractor(config_loader: ConfigLoader) -> TextExtractor:
     rec_config = config_loader.get_recognition_config()
     ov_config = config_loader.get_openvino_config()
     
-    # Resolve model paths
+    # Resolve model paths - use detectionModelPath/recognitionModelPath/characterDictPath from JSON
     models_config = config_loader.config.get("models", {})
     det_model_path = str(
-        config_loader.project_root / models_config.get("detection_model_path", "")
+        config_loader.project_root / models_config.get("detectionModelPath", "")
     )
     rec_model_path = str(
-        config_loader.project_root / models_config.get("recognition_model_path", "")
+        config_loader.project_root / models_config.get("recognitionModelPath", "")
     )
     char_dict_path = str(
-        config_loader.project_root / models_config.get("character_dict_path", "")
+        config_loader.project_root / models_config.get("characterDictPath", "")
     )
     
     extractor = TextExtractor(

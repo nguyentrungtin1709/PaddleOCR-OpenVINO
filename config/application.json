@@ -2,8 +2,8 @@
     "models": {
         "_description": "Paths to converted ONNX models",
         "detectionModelPath": "models/det/PP-OCRv5_mobile_det_infer.onnx",
-        "recognitionModelPath": "models/rec/PP-OCRv5_mobile_rec_infer.onnx",
-        "characterDictPath": "fonts/ppocr_keys_v1.txt"
+        "recognitionModelPath": "models/rec/en_PP-OCRv5_mobile_rec_infer.onnx",
+        "characterDictPath": "fonts/en_dict.txt"
     },
     "detection": {
         "_description": "Text detection configuration (DB algorithm)",
