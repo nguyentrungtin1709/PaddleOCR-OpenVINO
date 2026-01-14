@@ -114,6 +114,7 @@ $RECYCLE.BIN/
 # Output directories (generated at runtime)
 output/*
 logs/*
+samples/*
 
 # Temporary files
 temp/

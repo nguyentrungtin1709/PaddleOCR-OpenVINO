@@ -563,9 +563,9 @@ class TextExtractor:
                 borderMode=cv2.BORDER_REPLICATE
             )
             
-            # If height > width * 1.5, rotate 90 degrees
+            # If height > width * 1.5, it's vertical text - rotate to horizontal
             if height > width * 1.5:
-                cropped = cv2.rotate(cropped, cv2.ROTATE_90_CLOCKWISE)
+                cropped = cv2.rotate(cropped, cv2.ROTATE_90_COUNTERCLOCKWISE)
             
             return cropped
         except Exception:
