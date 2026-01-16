@@ -10,10 +10,12 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -181,6 +183,35 @@ def visualize_results(
     logger.info(f"Visualization saved to: {vis_file}")
 
 
+def save_crops(
+    crops: list,
+    output_path: Path,
+    image_name: str
+) -> None:
+    """
+    Save cropped text region images for debugging.
+    
+    Args:
+        crops: List of cropped text images (np.ndarray).
+        output_path: Output directory path.
+        image_name: Original image filename.
+    """
+    if len(crops) == 0:
+        return
+    
+    # Create directory for this image's crops
+    image_stem = Path(image_name).stem
+    crops_dir = output_path / image_stem
+    crops_dir.mkdir(parents=True, exist_ok=True)
+    
+    for i, crop in enumerate(crops, 1):
+        if crop is not None and crop.size > 0:
+            crop_file = crops_dir / f"crop_{i:03d}.jpg"
+            cv2.imwrite(str(crop_file), crop)
+    
+    logger.info(f"Saved {len(crops)} crops to: {crops_dir}")
+
+
 def create_extractor(config_loader: ConfigLoader) -> TextExtractor:
     """
     Create TextExtractor instance from configuration.
@@ -239,8 +270,9 @@ def process_image(
     image_path: Path,
     extractor: TextExtractor,
     output_path: Path,
-    visualize: bool = False
-) -> list:
+    visualize: bool = False,
+    debug_enabled: bool = False
+) -> tuple:
     """
     Process a single image through the OCR pipeline.
     
@@ -249,17 +281,23 @@ def process_image(
         extractor: TextExtractor instance.
         output_path: Output directory path.
         visualize: Whether to save visualization.
+        debug_enabled: Whether debug mode is enabled.
         
     Returns:
-        List of OCR results.
+        Tuple of (results, timing_info, crops, image_size):
+            - results: List of OCR results
+            - timing_info: Dictionary with timing information
+            - crops: List of cropped text images
+            - image_size: Tuple of (width, height)
     """
     logger.info(f"Processing: {image_path}")
     
     # Load image
     image = load_image(image_path)
+    image_size = (image.shape[1], image.shape[0])  # (width, height)
     
     # Run OCR
-    results = extractor.extract(image)
+    results, timing_info, crops = extractor.extract(image)
     
     # Save results
     save_results(results, output_path, image_path.name)
@@ -268,11 +306,34 @@ def process_image(
     if visualize:
         visualize_results(image, results, output_path, image_path.name)
     
+    # Save crops if debug enabled
+    if debug_enabled:
+        save_crops(crops, output_path, image_path.name)
+    
     # Print extracted text
     for i, result in enumerate(results, 1):
         logger.info(f"  [{i}] {result['text']} (score: {result['score']:.3f})")
     
-    return results
+    return results, timing_info, crops, image_size
+
+
+def format_results_for_csv(results: list) -> str:
+    """
+    Format OCR results as a string for CSV output.
+    
+    Args:
+        results: List of OCR result dictionaries.
+        
+    Returns:
+        Formatted string like "text1 (0.9523), text2 (0.8912)"
+    """
+    if len(results) == 0:
+        return ""
+    
+    return ", ".join(
+        f"{r['text']} ({r['score']:.4f})"
+        for r in results
+    )
 
 
 def main() -> int:
@@ -305,56 +366,120 @@ def main() -> int:
         logger.error(f"Failed to create extractor: {e}")
         return 1
     
-    # Determine output directory
+    # Get configurations
     output_config = config_loader.get_output_config()
+    debug_config = config_loader.get_debug_config()
+    
+    # Determine output directory
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
         output_dir = PROJECT_ROOT / output_dir
     
-    # Process images
-    if args.image:
-        # Process single image
-        image_path = Path(args.image)
-        if not image_path.is_absolute():
-            image_path = PROJECT_ROOT / image_path
-        
-        try:
-            process_image(image_path, extractor, output_dir, args.visualize)
-        except Exception as e:
-            logger.error(f"Error processing {image_path}: {e}")
-            return 1
-    else:
-        # Process all images in input directory
-        input_dir = Path(args.input_dir)
-        if not input_dir.is_absolute():
-            input_dir = PROJECT_ROOT / input_dir
-        
-        if not input_dir.exists():
-            logger.error(f"Input directory not found: {input_dir}")
-            return 1
-        
-        # Supported image formats
-        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
-        image_files = [
-            f for f in input_dir.iterdir()
-            if f.suffix.lower() in image_extensions
-        ]
-        
-        if len(image_files) == 0:
-            logger.warning(f"No images found in: {input_dir}")
-            return 0
-        
-        logger.info(f"Found {len(image_files)} images to process")
-        
-        success_count = 0
-        for image_path in image_files:
+    # Ensure output directory exists
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize CSV writer if debug enabled
+    csv_file = None
+    csv_writer = None
+    if debug_config.enabled:
+        csv_path = output_dir / "details.csv"
+        csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+        csv_writer = csv.writer(csv_file)
+        # Write header
+        csv_writer.writerow([
+            "filename",
+            "image_width",
+            "image_height",
+            "num_regions",
+            "detection_ms",
+            "recognition_ms",
+            "total_ms",
+            "results"
+        ])
+        logger.info(f"Debug mode enabled. Writing timing details to: {csv_path}")
+    
+    try:
+        # Process images
+        if args.image:
+            # Process single image
+            image_path = Path(args.image)
+            if not image_path.is_absolute():
+                image_path = PROJECT_ROOT / image_path
+            
             try:
-                process_image(image_path, extractor, output_dir, args.visualize)
-                success_count += 1
+                results, timing_info, crops, image_size = process_image(
+                    image_path, extractor, output_dir, args.visualize, debug_config.enabled
+                )
+                
+                # Write to CSV if debug enabled
+                if debug_config.enabled and csv_writer:
+                    csv_writer.writerow([
+                        image_path.name,
+                        image_size[0],  # width
+                        image_size[1],  # height
+                        len(results),
+                        f"{timing_info['detection_ms']:.2f}",
+                        f"{timing_info['recognition_ms']:.2f}",
+                        f"{timing_info['total_ms']:.2f}",
+                        format_results_for_csv(results)
+                    ])
             except Exception as e:
                 logger.error(f"Error processing {image_path}: {e}")
-        
-        logger.info(f"Processed {success_count}/{len(image_files)} images successfully")
+                return 1
+        else:
+            # Process all images in input directory
+            input_dir = Path(args.input_dir)
+            if not input_dir.is_absolute():
+                input_dir = PROJECT_ROOT / input_dir
+            
+            if not input_dir.exists():
+                logger.error(f"Input directory not found: {input_dir}")
+                return 1
+            
+            # Supported image formats
+            image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+            image_files = [
+                f for f in input_dir.iterdir()
+                if f.suffix.lower() in image_extensions
+            ]
+            
+            if len(image_files) == 0:
+                logger.warning(f"No images found in: {input_dir}")
+                return 0
+            
+            logger.info(f"Found {len(image_files)} images to process")
+            
+            success_count = 0
+            for image_path in image_files:
+                try:
+                    results, timing_info, crops, image_size = process_image(
+                        image_path, extractor, output_dir, args.visualize, debug_config.enabled
+                    )
+                    
+                    # Write to CSV if debug enabled
+                    if debug_config.enabled and csv_writer:
+                        csv_writer.writerow([
+                            image_path.name,
+                            image_size[0],  # width
+                            image_size[1],  # height
+                            len(results),
+                            f"{timing_info['detection_ms']:.2f}",
+                            f"{timing_info['recognition_ms']:.2f}",
+                            f"{timing_info['total_ms']:.2f}",
+                            format_results_for_csv(results)
+                        ])
+                    
+                    success_count += 1
+                except Exception as e:
+                    logger.error(f"Error processing {image_path}: {e}")
+            
+            logger.info(f"Processed {success_count}/{len(image_files)} images successfully")
+    
+    finally:
+        # Close CSV file if opened
+        if csv_file:
+            csv_file.close()
+            logger.info("Debug CSV file closed")
     
     return 0
 

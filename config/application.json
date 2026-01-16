@@ -52,5 +52,10 @@
         "_comment_saveVisualization": "Save visualization images with bounding boxes",
         "dropScoreThreshold": 0.5,
         "_comment_dropScoreThreshold": "Threshold to filter out low-score results in visualization"
+    },
+    "debug": {
+        "_description": "Debug and profiling configuration",
+        "enabled": true,
+        "_comment_enabled": "Enable detailed timing logging to CSV file and save cropped images"
     }
 }

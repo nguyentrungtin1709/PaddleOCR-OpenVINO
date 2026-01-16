@@ -11,6 +11,7 @@ Design principles:
 """
 
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -205,7 +206,7 @@ class TextExtractor:
         
         logger.info("Models compiled successfully")
     
-    def extract(self, image: np.ndarray) -> list:
+    def extract(self, image: np.ndarray) -> tuple:
         """
         Perform OCR on an image.
         
@@ -215,20 +216,37 @@ class TextExtractor:
         3. Post-process to get bounding boxes
         4. Crop text regions
         5. Run recognition on each region
-        6. Return combined results
+        6. Return combined results with timing info
         
         Args:
             image: BGR image as numpy array (H, W, C).
             
         Returns:
-            List of dictionaries with keys:
-                - bbox: List of 4 corner points [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
-                - text: Recognized text string
-                - score: Confidence score (0-1)
+            Tuple of (results, timing_info, crops):
+                - results: List of dictionaries with keys:
+                    - bbox: List of 4 corner points [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+                    - text: Recognized text string
+                    - score: Confidence score (0-1)
+                - timing_info: Dictionary with keys:
+                    - detection_ms: Detection time in milliseconds
+                    - recognition_ms: Recognition time in milliseconds
+                    - total_ms: Total processing time in milliseconds
+                - crops: List of cropped text region images (np.ndarray)
         """
+        # Initialize timing info and empty crops
+        timing_info = {
+            "detection_ms": 0.0,
+            "recognition_ms": 0.0,
+            "total_ms": 0.0
+        }
+        crops = []
+        
         if image is None or image.size == 0:
             logger.warning("Empty image provided")
-            return []
+            return [], timing_info, crops
+        
+        # Start timing for detection phase
+        t0 = time.perf_counter()
         
         # Step 1: Preprocess for detection
         input_tensor, shape_info = self._preprocess_detection(image)
@@ -239,10 +257,16 @@ class TextExtractor:
         # Step 3: Post-process detection
         boxes = self._postprocess_detection(det_output, shape_info)
         
+        # End detection timing
+        t1 = time.perf_counter()
+        timing_info["detection_ms"] = (t1 - t0) * 1000
+        
         if len(boxes) == 0:
             logger.info("No text detected")
-            return []
+            timing_info["total_ms"] = timing_info["detection_ms"]
+            return [], timing_info, crops
         
+        # Start timing for recognition phase
         # Step 4: Sort boxes (top-to-bottom, left-to-right)
         boxes = self._sort_boxes(boxes)
         
@@ -251,6 +275,11 @@ class TextExtractor:
         
         # Step 6: Run recognition
         texts, scores = self._run_recognition(crops)
+        
+        # End recognition timing
+        t2 = time.perf_counter()
+        timing_info["recognition_ms"] = (t2 - t1) * 1000
+        timing_info["total_ms"] = (t2 - t0) * 1000
         
         # Step 7: Combine results
         results = []
@@ -263,7 +292,7 @@ class TextExtractor:
                 })
         
         logger.info(f"Extracted {len(results)} text regions")
-        return results
+        return results, timing_info, crops
     
     def _preprocess_detection(
         self,
@@ -543,7 +572,10 @@ class TextExtractor:
                 np.linalg.norm(points[1] - points[2])
             ))
             
-            if width < 3 or height < 3:
+            # Filter out regions that are too small for quality recognition:
+            # - height < 24: would require >2x upscaling (48/24=2x max)
+            # - width < height/2: too vertical/narrow for horizontal text
+            if height < 24 or width < height / 2:
                 return None
             
             # Define destination points

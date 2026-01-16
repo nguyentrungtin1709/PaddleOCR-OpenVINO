@@ -53,6 +53,12 @@ class OutputConfig:
     drop_score_threshold: float
 
 
+@dataclass(frozen=True)
+class DebugConfig:
+    """Debug and profiling configuration parameters."""
+    enabled: bool
+
+
 class ConfigLoader:
     """
     Loads and parses configuration from application.json.
@@ -182,4 +188,16 @@ class ConfigLoader:
         return OutputConfig(
             save_visualization=out_cfg.get("saveVisualization", True),
             drop_score_threshold=out_cfg.get("dropScoreThreshold", 0.5)
+        )
+    
+    def get_debug_config(self) -> DebugConfig:
+        """
+        Get debug and profiling configuration.
+        
+        Returns:
+            DebugConfig dataclass with debug settings.
+        """
+        debug_cfg = self._config.get("debug", {})
+        return DebugConfig(
+            enabled=debug_cfg.get("enabled", False)
         )
