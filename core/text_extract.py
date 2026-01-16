@@ -572,10 +572,8 @@ class TextExtractor:
                 np.linalg.norm(points[1] - points[2])
             ))
             
-            # Filter out regions that are too small for quality recognition:
-            # - height < 24: would require >2x upscaling (48/24=2x max)
-            # - width < height/2: too vertical/narrow for horizontal text
-            if height < 24 or width < height / 2:
+            # Basic size check before expensive operations
+            if width < 3 or height < 3:
                 return None
             
             # Define destination points
@@ -595,9 +593,17 @@ class TextExtractor:
                 borderMode=cv2.BORDER_REPLICATE
             )
             
-            # If height > width * 1.5, it's vertical text - rotate to horizontal
-            if height > width * 1.5:
+            # Text is always horizontal - if image is portrait, rotate to landscape
+            if cropped.shape[0] > cropped.shape[1]:  # height > width
                 cropped = cv2.rotate(cropped, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            
+            # Filter out regions that are too small for quality recognition
+            # (applied AFTER rotation to use correct dimensions)
+            h, w = cropped.shape[:2]
+            # - height < 24: would require >2x upscaling (48/24=2x max)
+            # - width < height/2: too narrow for horizontal text
+            if h < 24 or w < h / 2:
+                return None
             
             return cropped
         except Exception:
