@@ -152,24 +152,32 @@ def visualize_results(
     """
     Draw bounding boxes and text on image and save.
     
+    Detected boxes are drawn in GREEN, created/intermediate boxes in RED.
+    
     Args:
         image: Original BGR image.
-        results: List of OCR results.
+        results: List of OCR results with 'source' field ('detected' or 'created').
         output_path: Output directory path.
         image_name: Original image filename.
     """
     vis_image = image.copy()
     
-    # Dark orange color in BGR format
-    DARK_ORANGE = (0, 140, 255)
+    # Colors in BGR format
+    DARK_ORANGE = (0, 140, 255)  # Text label color
+    COLOR_DETECTED = (0, 255, 0)  # Green for detected boxes
+    COLOR_CREATED = (0, 0, 255)   # Red for created/intermediate boxes
     
     for result in results:
         bbox = np.array(result["bbox"], dtype=np.int32)
         text = result["text"]
         score = result["score"]
+        source = result.get("source", "detected")
+        
+        # Choose box color based on source
+        box_color = COLOR_CREATED if source == "created" else COLOR_DETECTED
         
         # Draw bounding box
-        cv2.polylines(vis_image, [bbox], True, (0, 255, 0), 2)
+        cv2.polylines(vis_image, [bbox], True, box_color, 2)
         
         # Draw text label at top-right corner, outside the box
         label = f"{text} ({score:.2f})"

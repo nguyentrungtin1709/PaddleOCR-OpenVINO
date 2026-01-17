@@ -272,7 +272,7 @@ class TextExtractor:
         
         # Step 5: Process label structure - classify and filter boxes
         image_height = image.shape[0]
-        final_boxes = self._process_label_structure(boxes, image_height, image)
+        final_boxes, box_types = self._process_label_structure(boxes, image_height, image)
         
         if len(final_boxes) == 0:
             logger.info("No valid boxes after label structure processing")
@@ -280,7 +280,7 @@ class TextExtractor:
             return [], timing_info, crops
         
         # Step 6: Crop text regions from final boxes
-        filtered_boxes, crops = self._crop_text_regions(image, final_boxes)
+        filtered_boxes, crops, filtered_types = self._crop_text_regions(image, final_boxes, box_types)
         
         if len(crops) == 0:
             logger.info("No valid text crops after filtering")
@@ -298,13 +298,14 @@ class TextExtractor:
         # Step 8: Combine results - include all filtered boxes
         # Use filtered_boxes which matches 1:1 with texts and scores
         results = []
-        for i, (box, text, score) in enumerate(zip(filtered_boxes, texts, scores)):
+        for i, (box, text, score, box_type) in enumerate(zip(filtered_boxes, texts, scores, filtered_types)):
             # Display <None> for empty text
             display_text = text if text.strip() else "<None>"
             results.append({
                 "bbox": box.tolist(),
                 "text": display_text,
-                "score": float(score)
+                "score": float(score),
+                "source": box_type  # 'detected' or 'created'
             })
         
         logger.info(f"Extracted {len(results)} text regions")
@@ -541,7 +542,7 @@ class TextExtractor:
         boxes: np.ndarray,
         image_height: int,
         image: np.ndarray
-    ) -> np.ndarray:
+    ) -> tuple:
         """
         Process label structure to extract fixed 4 boxes.
         
@@ -555,7 +556,9 @@ class TextExtractor:
             image: Original image for creating intermediate box.
             
         Returns:
-            Array of 4 boxes: [position_box, product_code_box, size_box, color_box]
+            Tuple of (boxes, box_types):
+                - boxes: Array of 4 boxes [position, product, size, color]
+                - box_types: List of strings ['detected' or 'created']
         """
         # Classify boxes into upper and lower regions
         upper_boxes, lower_boxes = self._classify_boxes_by_region(boxes, image_height)
@@ -564,18 +567,21 @@ class TextExtractor:
         position_box = self._filter_upper_region(upper_boxes)
         
         # Process lower region - ensure 3 boxes (create intermediate if needed)
-        lower_final_boxes = self._process_lower_region(lower_boxes, image)
+        lower_final_boxes, lower_box_types = self._process_lower_region(lower_boxes, image)
         
         # Combine results
         final_boxes = []
+        box_types = []
         if position_box is not None:
             final_boxes.append(position_box)
+            box_types.append('detected')
         final_boxes.extend(lower_final_boxes)
+        box_types.extend(lower_box_types)
         
         if len(final_boxes) == 0:
-            return np.array([])
+            return np.array([]), []
         
-        return np.array(final_boxes, dtype=np.float32)
+        return np.array(final_boxes, dtype=np.float32), box_types
     
     def _classify_boxes_by_region(
         self,
@@ -658,13 +664,12 @@ class TextExtractor:
         self,
         lower_boxes: list,
         image: np.ndarray,
-        min_gap: float = 5.0,
-        intermediate_width: float = 80.0
-    ) -> list:
+        min_gap: float = 2.0
+    ) -> tuple:
         """
         Process lower region boxes, creating intermediate box if needed.
         
-        If only 2 boxes exist with a gap >= 5px between them,
+        If only 2 boxes exist with a gap >= 2px between them,
         create an intermediate box for the missing size field.
         
         If 3 boxes exist and middle box is smaller than average of others,
@@ -674,16 +679,17 @@ class TextExtractor:
             lower_boxes: List of boxes in lower region.
             image: Original image (for bounds checking).
             min_gap: Minimum gap to trigger intermediate box creation.
-            intermediate_width: Width of the intermediate box.
             
         Returns:
-            List of 3 boxes (or fewer if not enough detected).
+            Tuple of (boxes, box_types):
+                - boxes: List of 3 boxes (or fewer if not enough detected)
+                - box_types: List of strings ['detected' or 'created']
         """
         if len(lower_boxes) == 0:
-            return []
+            return [], []
         
         if len(lower_boxes) == 1:
-            return [self._order_points(lower_boxes[0])]
+            return [self._order_points(lower_boxes[0])], ['detected']
         
         # Sort all boxes by y-coordinate (top to bottom)
         sorted_boxes = sorted(lower_boxes, key=lambda b: np.min(b[:, 1]))
@@ -704,8 +710,8 @@ class TextExtractor:
             )
             
             if expanded_middle is not None:
-                return [ordered_boxes[0], expanded_middle, ordered_boxes[2]]
-            return ordered_boxes
+                return [ordered_boxes[0], expanded_middle, ordered_boxes[2]], ['detected', 'detected', 'detected']
+            return ordered_boxes, ['detected', 'detected', 'detected']
         
         # Exactly 2 boxes - check if we need to create intermediate
         box_above = sorted_boxes[0]
@@ -723,18 +729,18 @@ class TextExtractor:
         
         if gap < min_gap:
             # Gap too small, don't create intermediate box
-            return sorted_boxes
+            return [ordered_above, ordered_below], ['detected', 'detected']
         
         # Create intermediate box
         intermediate_box = self._create_intermediate_box(
-            ordered_above, ordered_below, intermediate_width, image
+            ordered_above, ordered_below, image
         )
         
         if intermediate_box is not None:
             # Insert intermediate box between the two
-            return [ordered_above, intermediate_box, ordered_below]
+            return [ordered_above, intermediate_box, ordered_below], ['detected', 'created', 'detected']
         
-        return [ordered_above, ordered_below]
+        return [ordered_above, ordered_below], ['detected', 'detected']
     
     def _expand_middle_box_if_needed(
         self,
@@ -744,7 +750,12 @@ class TextExtractor:
         image: np.ndarray
     ) -> Optional[np.ndarray]:
         """
-        Expand middle box if its height is smaller than average of surrounding boxes.
+        Expand middle box to align left edge with surrounding boxes and maintain proper dimensions.
+        
+        Expansions applied:
+        1. Left edge: Align to min(x_left of box_above, x_left of box_below) if middle is indented
+        2. Height: Expand to average of surrounding boxes if too small
+        3. Width: Expand to right if w < 1.5 * h
         
         Args:
             box_above: Ordered points [TL, TR, BR, BL] of upper box.
@@ -762,13 +773,26 @@ class TextExtractor:
             height_below = np.linalg.norm(box_below[3] - box_below[0])
             avg_height = (height_above + height_below) / 2
             
-            # If middle box is already large enough, no expansion needed
-            if height_middle >= avg_height:
-                return None
+            # Calculate current width
+            width_middle = np.linalg.norm(box_middle[1] - box_middle[0])
             
-            # Expand middle box
-            expand_total = avg_height - height_middle
-            expand_each = expand_total / 2
+            # Calculate left x-coordinates
+            x_left_above = min(box_above[0][0], box_above[3][0])  # TL.x, BL.x
+            x_left_middle = min(box_middle[0][0], box_middle[3][0])  # TL.x, BL.x
+            x_left_below = min(box_below[0][0], box_below[3][0])  # TL.x, BL.x
+            x_left_target = min(x_left_above, x_left_below)
+            
+            # Determine if expansion is needed
+            need_height_expand = height_middle < avg_height
+            need_left_expand = x_left_middle > x_left_target + 1  # Middle is indented (1px tolerance)
+            new_height = avg_height if need_height_expand else height_middle
+            
+            # Check if width expansion is needed (w >= 1.5 * h)
+            min_width = 1.5 * new_height
+            need_width_expand = width_middle < min_width
+            
+            if not need_height_expand and not need_width_expand and not need_left_expand:
+                return None
             
             # Get corners of middle box
             tl = box_middle[0].copy()
@@ -776,19 +800,69 @@ class TextExtractor:
             br = box_middle[2].copy()
             bl = box_middle[3].copy()
             
-            # Calculate vertical direction (from TL to BL)
-            height_dir = bl - tl
-            height_len = np.linalg.norm(height_dir)
-            if height_len < 1e-6:
-                return None
-            height_dir = height_dir / height_len  # Normalize
+            # Expand left edge if needed (align to target x_left)
+            if need_left_expand:
+                left_expand = x_left_middle - x_left_target
+                
+                # Calculate horizontal direction (from TL to TR, normalized)
+                width_dir = tr - tl
+                width_len = np.linalg.norm(width_dir)
+                if width_len < 1e-6:
+                    width_dir = box_above[1] - box_above[0]
+                    width_len = np.linalg.norm(width_dir)
+                    if width_len < 1e-6:
+                        return None
+                width_dir = width_dir / width_len
+                
+                # Move left edge to the left (opposite of width direction)
+                tl = tl - width_dir * left_expand
+                bl = bl - width_dir * left_expand
+                
+                # Update width_middle after left expansion
+                width_middle = np.linalg.norm(tr - tl)
             
-            # Expand top edge upward (opposite of height direction)
-            tl = tl - height_dir * expand_each
-            tr = tr - height_dir * expand_each
-            # Expand bottom edge downward (same as height direction)
-            bl = bl + height_dir * expand_each
-            br = br + height_dir * expand_each
+            # Expand height if needed (equally top and bottom)
+            if need_height_expand:
+                expand_height = avg_height - height_middle
+                expand_each = expand_height / 2
+                
+                # Calculate vertical direction (from TL to BL)
+                height_dir = bl - tl
+                height_len = np.linalg.norm(height_dir)
+                if height_len < 1e-6:
+                    return None
+                height_dir = height_dir / height_len  # Normalize
+                
+                # Expand top edge upward (opposite of height direction)
+                tl = tl - height_dir * expand_each
+                tr = tr - height_dir * expand_each
+                # Expand bottom edge downward (same as height direction)
+                bl = bl + height_dir * expand_each
+                br = br + height_dir * expand_each
+            
+            # Recalculate width after left expansion and check if right expansion still needed
+            current_width = np.linalg.norm(tr - tl)
+            min_width = 1.5 * new_height
+            need_width_expand_right = current_width < min_width
+            
+            # Expand width to the right if needed
+            if need_width_expand_right:
+                expand_width = min_width - current_width
+                
+                # Calculate horizontal direction (from TL to TR)
+                width_dir = tr - tl
+                width_len = np.linalg.norm(width_dir)
+                if width_len < 1e-6:
+                    # Use direction from box_above if middle box is too narrow
+                    width_dir = box_above[1] - box_above[0]
+                    width_len = np.linalg.norm(width_dir)
+                    if width_len < 1e-6:
+                        return None
+                width_dir = width_dir / width_len  # Normalize
+                
+                # Expand only to the right (keep left edge aligned)
+                tr = tr + width_dir * expand_width
+                br = br + width_dir * expand_width
             
             # Create expanded box
             expanded = np.array([tl, tr, br, bl], dtype=np.float32)
@@ -806,77 +880,77 @@ class TextExtractor:
         self,
         box_above: np.ndarray,
         box_below: np.ndarray,
-        width: float,
         image: np.ndarray
     ) -> Optional[np.ndarray]:
         """
-        Create an intermediate box between two boxes, left-aligned.
+        Create an intermediate box between two boxes, left-aligned with the leftmost edge.
         
-        The box is created by connecting the bottom-left of the upper box
-        to the top-left of the lower box, maintaining the same text alignment.
-        If the resulting height is smaller than the average height of the 
-        surrounding boxes, expand equally to top and bottom.
+        The box is created between box_above and box_below with:
+        - Left edge (TL.x, BL.x) aligned to the leftmost x of both boxes
+        - Width = 1.5 × height
+        - Height expanded to average if too small
         
         Args:
             box_above: Ordered points [TL, TR, BR, BL] of upper box.
             box_below: Ordered points [TL, TR, BR, BL] of lower box.
-            width: Width of the intermediate box.
             image: Original image for bounds checking.
             
         Returns:
             New box as (4, 2) array [TL, TR, BR, BL], or None if invalid.
         """
         try:
-            # Get left edge points
-            # Bottom-left of upper box becomes top-left of intermediate
-            tl = box_above[3].copy()  # BL of above
-            # Top-left of lower box becomes bottom-left of intermediate
-            bl = box_below[0].copy()  # TL of below
+            # Find the leftmost x-coordinate from both boxes
+            x_left = min(
+                box_above[0][0],  # TL of above
+                box_above[3][0],  # BL of above
+                box_below[0][0],  # TL of below
+                box_below[3][0]   # BL of below
+            )
             
-            # Calculate direction vector (from box_above's bottom edge)
+            # Get y-coordinates for top and bottom edges
+            # Top of intermediate = bottom of box_above
+            tl_y = box_above[3][1]  # BL.y of above
+            # Bottom of intermediate = top of box_below
+            bl_y = box_below[0][1]  # TL.y of below
+            
+            # Calculate direction vector (horizontal, from box_above's bottom edge)
             direction = box_above[2] - box_above[3]  # BR - BL
             length = np.linalg.norm(direction)
             if length < 1e-6:
                 return None
             direction = direction / length  # Normalize
             
-            # Create right edge points
-            tr = tl + direction * width
-            br = bl + direction * width
-            
-            # Create box in order [TL, TR, BR, BL]
-            intermediate = np.array([tl, tr, br, bl], dtype=np.float32)
-            
-            # Calculate current height and average height of surrounding boxes
-            current_height = np.linalg.norm(bl - tl)
-            
-            # Height of box_above (TL to BL)
+            # Calculate heights
+            current_height = abs(bl_y - tl_y)
             height_above = np.linalg.norm(box_above[3] - box_above[0])
-            # Height of box_below (TL to BL)
             height_below = np.linalg.norm(box_below[3] - box_below[0])
             avg_height = (height_above + height_below) / 2
+            
+            # Use the larger of current height or average height
+            final_height = max(current_height, avg_height)
+            
+            # Calculate width = 1.5 × height
+            width = 1.5 * final_height
+            
+            # Create initial points with left-aligned x
+            tl = np.array([x_left, tl_y], dtype=np.float32)
+            bl = np.array([x_left, bl_y], dtype=np.float32)
             
             # If current height is smaller than average, expand equally
             if current_height < avg_height:
                 expand_total = avg_height - current_height
                 expand_each = expand_total / 2
                 
-                # Calculate vertical direction (perpendicular to horizontal)
-                # From TL to BL is the height direction
-                height_dir = bl - tl
-                height_len = np.linalg.norm(height_dir)
-                if height_len > 1e-6:
-                    height_dir = height_dir / height_len  # Normalize
-                    
-                    # Expand top edge upward (opposite of height direction)
-                    tl = tl - height_dir * expand_each
-                    tr = tr - height_dir * expand_each
-                    # Expand bottom edge downward (same as height direction)
-                    bl = bl + height_dir * expand_each
-                    br = br + height_dir * expand_each
-                    
-                    # Recreate box
-                    intermediate = np.array([tl, tr, br, bl], dtype=np.float32)
+                # Expand top edge upward, bottom edge downward
+                tl[1] = tl[1] - expand_each
+                bl[1] = bl[1] + expand_each
+            
+            # Create right edge points using horizontal direction
+            tr = tl + direction * width
+            br = bl + direction * width
+            
+            # Create box in order [TL, TR, BR, BL]
+            intermediate = np.array([tl, tr, br, bl], dtype=np.float32)
             
             # Clip to image boundaries
             h, w = image.shape[:2]
@@ -890,7 +964,8 @@ class TextExtractor:
     def _crop_text_regions(
         self,
         image: np.ndarray,
-        boxes: np.ndarray
+        boxes: np.ndarray,
+        box_types: list = None
     ) -> tuple:
         """
         Crop and straighten text regions from image.
@@ -898,12 +973,17 @@ class TextExtractor:
         Args:
             image: Original BGR image.
             boxes: Array of bounding boxes.
+            box_types: List of box types ('detected' or 'created').
             
         Returns:
-            Tuple of (filtered_boxes, crops):
+            Tuple of (filtered_boxes, crops, filtered_types):
                 - filtered_boxes: Array of boxes that have valid crops
                 - crops: List of cropped text region images
+                - filtered_types: List of box types for valid crops
         """
+        if box_types is None:
+            box_types = ['detected'] * len(boxes)
+            
         crops = []
         valid_indices = []
         
@@ -913,13 +993,15 @@ class TextExtractor:
                 crops.append(crop)
                 valid_indices.append(i)
         
-        # Filter boxes to only include those with valid crops
+        # Filter boxes and types to only include those with valid crops
         if len(valid_indices) > 0:
             filtered_boxes = boxes[valid_indices]
+            filtered_types = [box_types[i] for i in valid_indices]
         else:
             filtered_boxes = np.array([])
+            filtered_types = []
         
-        return filtered_boxes, crops
+        return filtered_boxes, crops, filtered_types
     
     def _order_points(self, pts: np.ndarray) -> np.ndarray:
         """
@@ -1003,9 +1085,9 @@ class TextExtractor:
             
             # Filter out regions that are too small for quality recognition
             h, w = cropped.shape[:2]
-            # - height < 24: would require >2x upscaling (48/24=2x max)
+            # - height < 12: too small for any recognition
             # - width < height/2: too narrow for horizontal text
-            if h < 24 or w < h / 2:
+            if h < 12 or w < h / 2:
                 return None
             
             return cropped
