@@ -633,8 +633,8 @@ class TextExtractor:
         """
         Filter noise in upper region and select the main position box.
         
-        The main box is the one with the lowest bottom edge (closest to
-        the 35% boundary), as noise tends to be higher up.
+        The main box is selected based on largest area, as the real
+        position box (e.g., "1/2") is typically larger than noise.
         
         Args:
             upper_boxes: List of boxes in upper region.
@@ -648,14 +648,22 @@ class TextExtractor:
         if len(upper_boxes) == 1:
             return upper_boxes[0]
         
-        # Find box with the largest bottom_y (lowest position)
-        max_bottom_y = -1
+        # Find box with the largest area
+        max_area = -1
         selected_box = None
         
         for box in upper_boxes:
-            bottom_y = np.max(box[:, 1])  # Max y = bottom edge
-            if bottom_y > max_bottom_y:
-                max_bottom_y = bottom_y
+            # Calculate area using Shoelace formula
+            n = len(box)
+            area = 0.0
+            for i in range(n):
+                j = (i + 1) % n
+                area += box[i][0] * box[j][1]
+                area -= box[j][0] * box[i][1]
+            area = abs(area) / 2.0
+            
+            if area > max_area:
+                max_area = area
                 selected_box = box
         
         return selected_box
