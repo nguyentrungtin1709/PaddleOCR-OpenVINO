@@ -160,6 +160,9 @@ def visualize_results(
     """
     vis_image = image.copy()
     
+    # Dark orange color in BGR format
+    DARK_ORANGE = (0, 140, 255)
+    
     for result in results:
         bbox = np.array(result["bbox"], dtype=np.int32)
         text = result["text"]
@@ -168,12 +171,21 @@ def visualize_results(
         # Draw bounding box
         cv2.polylines(vis_image, [bbox], True, (0, 255, 0), 2)
         
-        # Draw text label
+        # Draw text label at top-right corner, outside the box
         label = f"{text} ({score:.2f})"
-        x, y = int(bbox[0][0]), int(bbox[0][1]) - 5
+        
+        # Find actual top-right corner (max x, min y)
+        max_x = int(np.max(bbox[:, 0]))
+        min_y = int(np.min(bbox[:, 1]))
+        
+        # Position: right of box + padding, aligned with top edge
+        x = max_x + 5  # 5px padding from right edge of box
+        y = min_y + 12  # Add font height so baseline aligns with top edge
+        
+        # Draw text with dark orange color and bold font
         cv2.putText(
             vis_image, label, (x, y),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, DARK_ORANGE, 2
         )
     
     output_path.mkdir(parents=True, exist_ok=True)

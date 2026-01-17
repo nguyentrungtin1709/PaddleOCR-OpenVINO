@@ -270,8 +270,13 @@ class TextExtractor:
         # Step 4: Sort boxes (top-to-bottom, left-to-right)
         boxes = self._sort_boxes(boxes)
         
-        # Step 5: Crop text regions
-        crops = self._crop_text_regions(image, boxes)
+        # Step 5: Crop text regions (returns filtered boxes with valid crops)
+        filtered_boxes, crops = self._crop_text_regions(image, boxes)
+        
+        if len(crops) == 0:
+            logger.info("No valid text crops after filtering")
+            timing_info["total_ms"] = timing_info["detection_ms"]
+            return [], timing_info, crops
         
         # Step 6: Run recognition
         texts, scores = self._run_recognition(crops)
@@ -281,15 +286,17 @@ class TextExtractor:
         timing_info["recognition_ms"] = (t2 - t1) * 1000
         timing_info["total_ms"] = (t2 - t0) * 1000
         
-        # Step 7: Combine results
+        # Step 7: Combine results - include all filtered boxes
+        # Use filtered_boxes which matches 1:1 with texts and scores
         results = []
-        for i, (box, text, score) in enumerate(zip(boxes, texts, scores)):
-            if score >= self.rec_score_thresh:
-                results.append({
-                    "bbox": box.tolist(),
-                    "text": text,
-                    "score": float(score)
-                })
+        for i, (box, text, score) in enumerate(zip(filtered_boxes, texts, scores)):
+            # Display <None> for empty text
+            display_text = text if text.strip() else "<None>"
+            results.append({
+                "bbox": box.tolist(),
+                "text": display_text,
+                "score": float(score)
+            })
         
         logger.info(f"Extracted {len(results)} text regions")
         return results, timing_info, crops
@@ -524,7 +531,7 @@ class TextExtractor:
         self,
         image: np.ndarray,
         boxes: np.ndarray
-    ) -> list:
+    ) -> tuple:
         """
         Crop and straighten text regions from image.
         
@@ -533,16 +540,26 @@ class TextExtractor:
             boxes: Array of bounding boxes.
             
         Returns:
-            List of cropped text region images.
+            Tuple of (filtered_boxes, crops):
+                - filtered_boxes: Array of boxes that have valid crops
+                - crops: List of cropped text region images
         """
         crops = []
+        valid_indices = []
         
-        for box in boxes:
+        for i, box in enumerate(boxes):
             crop = self._get_rotate_crop_image(image, box)
             if crop is not None and crop.size > 0:
                 crops.append(crop)
+                valid_indices.append(i)
         
-        return crops
+        # Filter boxes to only include those with valid crops
+        if len(valid_indices) > 0:
+            filtered_boxes = boxes[valid_indices]
+        else:
+            filtered_boxes = np.array([])
+        
+        return filtered_boxes, crops
     
     def _get_rotate_crop_image(
         self,
