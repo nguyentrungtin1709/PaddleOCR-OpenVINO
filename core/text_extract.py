@@ -58,7 +58,7 @@ class TextExtractor:
         # Recognition parameters
         rec_image_height: int = 48,
         rec_max_width: int = 320,
-        rec_batch_size: int = 6,
+        rec_batch_size: int = 4,
         rec_score_thresh: float = 0.3,
         # OpenVINO parameters
         device: str = "CPU",
@@ -270,15 +270,24 @@ class TextExtractor:
         # Step 4: Sort boxes (top-to-bottom, left-to-right)
         boxes = self._sort_boxes(boxes)
         
-        # Step 5: Crop text regions (returns filtered boxes with valid crops)
-        filtered_boxes, crops = self._crop_text_regions(image, boxes)
+        # Step 5: Process label structure - classify and filter boxes
+        image_height = image.shape[0]
+        final_boxes = self._process_label_structure(boxes, image_height, image)
+        
+        if len(final_boxes) == 0:
+            logger.info("No valid boxes after label structure processing")
+            timing_info["total_ms"] = timing_info["detection_ms"]
+            return [], timing_info, crops
+        
+        # Step 6: Crop text regions from final boxes
+        filtered_boxes, crops = self._crop_text_regions(image, final_boxes)
         
         if len(crops) == 0:
             logger.info("No valid text crops after filtering")
             timing_info["total_ms"] = timing_info["detection_ms"]
             return [], timing_info, crops
         
-        # Step 6: Run recognition
+        # Step 7: Run recognition
         texts, scores = self._run_recognition(crops)
         
         # End recognition timing
@@ -286,7 +295,7 @@ class TextExtractor:
         timing_info["recognition_ms"] = (t2 - t1) * 1000
         timing_info["total_ms"] = (t2 - t0) * 1000
         
-        # Step 7: Combine results - include all filtered boxes
+        # Step 8: Combine results - include all filtered boxes
         # Use filtered_boxes which matches 1:1 with texts and scores
         results = []
         for i, (box, text, score) in enumerate(zip(filtered_boxes, texts, scores)):
@@ -527,6 +536,357 @@ class TextExtractor:
         indices = np.lexsort((boxes[:, 0, 0], boxes[:, 0, 1]))
         return boxes[indices]
     
+    def _process_label_structure(
+        self,
+        boxes: np.ndarray,
+        image_height: int,
+        image: np.ndarray
+    ) -> np.ndarray:
+        """
+        Process label structure to extract fixed 4 boxes.
+        
+        Label structure:
+        - Upper region (35%): Position info (e.g., "1/1") + noise
+        - Lower region (65%): Product code, size, color
+        
+        Args:
+            boxes: Sorted array of detected boxes.
+            image_height: Height of the image.
+            image: Original image for creating intermediate box.
+            
+        Returns:
+            Array of 4 boxes: [position_box, product_code_box, size_box, color_box]
+        """
+        # Classify boxes into upper and lower regions
+        upper_boxes, lower_boxes = self._classify_boxes_by_region(boxes, image_height)
+        
+        # Process upper region - filter noise, get 1 main box
+        position_box = self._filter_upper_region(upper_boxes)
+        
+        # Process lower region - ensure 3 boxes (create intermediate if needed)
+        lower_final_boxes = self._process_lower_region(lower_boxes, image)
+        
+        # Combine results
+        final_boxes = []
+        if position_box is not None:
+            final_boxes.append(position_box)
+        final_boxes.extend(lower_final_boxes)
+        
+        if len(final_boxes) == 0:
+            return np.array([])
+        
+        return np.array(final_boxes, dtype=np.float32)
+    
+    def _classify_boxes_by_region(
+        self,
+        boxes: np.ndarray,
+        image_height: int,
+        upper_ratio: float = 0.35,
+        threshold: float = 0.40
+    ) -> tuple:
+        """
+        Classify boxes into upper (35%) and lower (65%) regions.
+        
+        A box belongs to upper region if at least 40% of its area
+        is above the 35% mark.
+        
+        Args:
+            boxes: Array of boxes.
+            image_height: Height of the image.
+            upper_ratio: Ratio defining upper region (default 0.35).
+            threshold: Minimum ratio of box above mark to be upper (default 0.40).
+            
+        Returns:
+            Tuple of (upper_boxes, lower_boxes) as lists.
+        """
+        mark_y = image_height * upper_ratio
+        upper_boxes = []
+        lower_boxes = []
+        
+        for box in boxes:
+            # Get min and max y coordinates of the box
+            min_y = np.min(box[:, 1])
+            max_y = np.max(box[:, 1])
+            box_height = max_y - min_y
+            
+            if box_height <= 0:
+                continue
+            
+            # Calculate portion of box above the mark
+            portion_above = max(0, mark_y - min_y)
+            ratio_above = portion_above / box_height
+            
+            if ratio_above >= threshold:
+                upper_boxes.append(box)
+            else:
+                lower_boxes.append(box)
+        
+        return upper_boxes, lower_boxes
+    
+    def _filter_upper_region(self, upper_boxes: list) -> Optional[np.ndarray]:
+        """
+        Filter noise in upper region and select the main position box.
+        
+        The main box is the one with the lowest bottom edge (closest to
+        the 35% boundary), as noise tends to be higher up.
+        
+        Args:
+            upper_boxes: List of boxes in upper region.
+            
+        Returns:
+            The main position box, or None if no boxes.
+        """
+        if len(upper_boxes) == 0:
+            return None
+        
+        if len(upper_boxes) == 1:
+            return upper_boxes[0]
+        
+        # Find box with the largest bottom_y (lowest position)
+        max_bottom_y = -1
+        selected_box = None
+        
+        for box in upper_boxes:
+            bottom_y = np.max(box[:, 1])  # Max y = bottom edge
+            if bottom_y > max_bottom_y:
+                max_bottom_y = bottom_y
+                selected_box = box
+        
+        return selected_box
+    
+    def _process_lower_region(
+        self,
+        lower_boxes: list,
+        image: np.ndarray,
+        min_gap: float = 5.0,
+        intermediate_width: float = 80.0
+    ) -> list:
+        """
+        Process lower region boxes, creating intermediate box if needed.
+        
+        If only 2 boxes exist with a gap >= 5px between them,
+        create an intermediate box for the missing size field.
+        
+        If 3 boxes exist and middle box is smaller than average of others,
+        expand the middle box to match.
+        
+        Args:
+            lower_boxes: List of boxes in lower region.
+            image: Original image (for bounds checking).
+            min_gap: Minimum gap to trigger intermediate box creation.
+            intermediate_width: Width of the intermediate box.
+            
+        Returns:
+            List of 3 boxes (or fewer if not enough detected).
+        """
+        if len(lower_boxes) == 0:
+            return []
+        
+        if len(lower_boxes) == 1:
+            return [self._order_points(lower_boxes[0])]
+        
+        # Sort all boxes by y-coordinate (top to bottom)
+        sorted_boxes = sorted(lower_boxes, key=lambda b: np.min(b[:, 1]))
+        
+        if len(sorted_boxes) >= 3:
+            # Take first 3 boxes (now correctly sorted top-to-bottom)
+            boxes = sorted_boxes[:3]
+            
+            # Order points for all boxes
+            ordered_boxes = [self._order_points(b) for b in boxes]
+            
+            # Check if middle box needs expansion
+            expanded_middle = self._expand_middle_box_if_needed(
+                ordered_boxes[0],  # box above (18000)
+                ordered_boxes[1],  # middle box (size)
+                ordered_boxes[2],  # box below (SAND)
+                image
+            )
+            
+            if expanded_middle is not None:
+                return [ordered_boxes[0], expanded_middle, ordered_boxes[2]]
+            return ordered_boxes
+        
+        # Exactly 2 boxes - check if we need to create intermediate
+        box_above = sorted_boxes[0]
+        box_below = sorted_boxes[1]
+        
+        # Order points for both boxes to get consistent corners
+        ordered_above = self._order_points(box_above)
+        ordered_below = self._order_points(box_below)
+        
+        # Calculate gap between boxes
+        # Bottom of upper box (BL and BR) to top of lower box (TL and TR)
+        bottom_y_above = max(ordered_above[3][1], ordered_above[2][1])  # BL, BR
+        top_y_below = min(ordered_below[0][1], ordered_below[1][1])      # TL, TR
+        gap = top_y_below - bottom_y_above
+        
+        if gap < min_gap:
+            # Gap too small, don't create intermediate box
+            return sorted_boxes
+        
+        # Create intermediate box
+        intermediate_box = self._create_intermediate_box(
+            ordered_above, ordered_below, intermediate_width, image
+        )
+        
+        if intermediate_box is not None:
+            # Insert intermediate box between the two
+            return [ordered_above, intermediate_box, ordered_below]
+        
+        return [ordered_above, ordered_below]
+    
+    def _expand_middle_box_if_needed(
+        self,
+        box_above: np.ndarray,
+        box_middle: np.ndarray,
+        box_below: np.ndarray,
+        image: np.ndarray
+    ) -> Optional[np.ndarray]:
+        """
+        Expand middle box if its height is smaller than average of surrounding boxes.
+        
+        Args:
+            box_above: Ordered points [TL, TR, BR, BL] of upper box.
+            box_middle: Ordered points [TL, TR, BR, BL] of middle box.
+            box_below: Ordered points [TL, TR, BR, BL] of lower box.
+            image: Original image for bounds checking.
+            
+        Returns:
+            Expanded middle box, or None if no expansion needed.
+        """
+        try:
+            # Calculate heights
+            height_above = np.linalg.norm(box_above[3] - box_above[0])
+            height_middle = np.linalg.norm(box_middle[3] - box_middle[0])
+            height_below = np.linalg.norm(box_below[3] - box_below[0])
+            avg_height = (height_above + height_below) / 2
+            
+            # If middle box is already large enough, no expansion needed
+            if height_middle >= avg_height:
+                return None
+            
+            # Expand middle box
+            expand_total = avg_height - height_middle
+            expand_each = expand_total / 2
+            
+            # Get corners of middle box
+            tl = box_middle[0].copy()
+            tr = box_middle[1].copy()
+            br = box_middle[2].copy()
+            bl = box_middle[3].copy()
+            
+            # Calculate vertical direction (from TL to BL)
+            height_dir = bl - tl
+            height_len = np.linalg.norm(height_dir)
+            if height_len < 1e-6:
+                return None
+            height_dir = height_dir / height_len  # Normalize
+            
+            # Expand top edge upward (opposite of height direction)
+            tl = tl - height_dir * expand_each
+            tr = tr - height_dir * expand_each
+            # Expand bottom edge downward (same as height direction)
+            bl = bl + height_dir * expand_each
+            br = br + height_dir * expand_each
+            
+            # Create expanded box
+            expanded = np.array([tl, tr, br, bl], dtype=np.float32)
+            
+            # Clip to image boundaries
+            h, w = image.shape[:2]
+            expanded[:, 0] = np.clip(expanded[:, 0], 0, w)
+            expanded[:, 1] = np.clip(expanded[:, 1], 0, h)
+            
+            return expanded
+        except Exception:
+            return None
+    
+    def _create_intermediate_box(
+        self,
+        box_above: np.ndarray,
+        box_below: np.ndarray,
+        width: float,
+        image: np.ndarray
+    ) -> Optional[np.ndarray]:
+        """
+        Create an intermediate box between two boxes, left-aligned.
+        
+        The box is created by connecting the bottom-left of the upper box
+        to the top-left of the lower box, maintaining the same text alignment.
+        If the resulting height is smaller than the average height of the 
+        surrounding boxes, expand equally to top and bottom.
+        
+        Args:
+            box_above: Ordered points [TL, TR, BR, BL] of upper box.
+            box_below: Ordered points [TL, TR, BR, BL] of lower box.
+            width: Width of the intermediate box.
+            image: Original image for bounds checking.
+            
+        Returns:
+            New box as (4, 2) array [TL, TR, BR, BL], or None if invalid.
+        """
+        try:
+            # Get left edge points
+            # Bottom-left of upper box becomes top-left of intermediate
+            tl = box_above[3].copy()  # BL of above
+            # Top-left of lower box becomes bottom-left of intermediate
+            bl = box_below[0].copy()  # TL of below
+            
+            # Calculate direction vector (from box_above's bottom edge)
+            direction = box_above[2] - box_above[3]  # BR - BL
+            length = np.linalg.norm(direction)
+            if length < 1e-6:
+                return None
+            direction = direction / length  # Normalize
+            
+            # Create right edge points
+            tr = tl + direction * width
+            br = bl + direction * width
+            
+            # Create box in order [TL, TR, BR, BL]
+            intermediate = np.array([tl, tr, br, bl], dtype=np.float32)
+            
+            # Calculate current height and average height of surrounding boxes
+            current_height = np.linalg.norm(bl - tl)
+            
+            # Height of box_above (TL to BL)
+            height_above = np.linalg.norm(box_above[3] - box_above[0])
+            # Height of box_below (TL to BL)
+            height_below = np.linalg.norm(box_below[3] - box_below[0])
+            avg_height = (height_above + height_below) / 2
+            
+            # If current height is smaller than average, expand equally
+            if current_height < avg_height:
+                expand_total = avg_height - current_height
+                expand_each = expand_total / 2
+                
+                # Calculate vertical direction (perpendicular to horizontal)
+                # From TL to BL is the height direction
+                height_dir = bl - tl
+                height_len = np.linalg.norm(height_dir)
+                if height_len > 1e-6:
+                    height_dir = height_dir / height_len  # Normalize
+                    
+                    # Expand top edge upward (opposite of height direction)
+                    tl = tl - height_dir * expand_each
+                    tr = tr - height_dir * expand_each
+                    # Expand bottom edge downward (same as height direction)
+                    bl = bl + height_dir * expand_each
+                    br = br + height_dir * expand_each
+                    
+                    # Recreate box
+                    intermediate = np.array([tl, tr, br, bl], dtype=np.float32)
+            
+            # Clip to image boundaries
+            h, w = image.shape[:2]
+            intermediate[:, 0] = np.clip(intermediate[:, 0], 0, w)
+            intermediate[:, 1] = np.clip(intermediate[:, 1], 0, h)
+            
+            return intermediate
+        except Exception:
+            return None
+    
     def _crop_text_regions(
         self,
         image: np.ndarray,
@@ -561,48 +921,76 @@ class TextExtractor:
         
         return filtered_boxes, crops
     
+    def _order_points(self, pts: np.ndarray) -> np.ndarray:
+        """
+        Orders 4 points in consistent order: Top-Left, Top-Right, Bottom-Right, Bottom-Left.
+        
+        This ensures correct perspective transform for text regions that may be
+        slightly rotated. Assumes text is mostly horizontal (rotation < 45°).
+        
+        Args:
+            pts: Array of shape (4, 2) with corner coordinates.
+            
+        Returns:
+            Array of shape (4, 2) ordered as [TL, TR, BR, BL].
+        """
+        center = np.mean(pts, axis=0)
+        
+        def get_angle(p):
+            return np.arctan2(p[1] - center[1], p[0] - center[0])
+        
+        sorted_pts = sorted(pts, key=get_angle)
+        sorted_pts = np.array(sorted_pts, dtype="float32")
+        
+        sums = sorted_pts.sum(axis=1)
+        top_left_idx = np.argmin(sums)
+        ordered = np.roll(sorted_pts, -top_left_idx, axis=0)
+        
+        return ordered
+    
     def _get_rotate_crop_image(
         self,
         image: np.ndarray,
         points: np.ndarray
     ) -> Optional[np.ndarray]:
         """
-        Crop and rotate a text region to horizontal orientation.
+        Crop and straighten a text region to horizontal orientation.
         
         Args:
             image: Source image.
             points: Four corner points of the text region.
             
         Returns:
-            Cropped and rotated image, or None if failed.
+            Cropped and straightened image, or None if failed.
         """
         try:
-            points = points.astype(np.float32)
+            # Order points: TL, TR, BR, BL
+            ordered = self._order_points(points.astype(np.float32))
             
-            # Calculate width and height
+            # Calculate width (TL-TR and BL-BR) and height (TL-BL and TR-BR)
             width = int(max(
-                np.linalg.norm(points[0] - points[1]),
-                np.linalg.norm(points[2] - points[3])
+                np.linalg.norm(ordered[0] - ordered[1]),  # TL to TR
+                np.linalg.norm(ordered[3] - ordered[2])   # BL to BR
             ))
             height = int(max(
-                np.linalg.norm(points[0] - points[3]),
-                np.linalg.norm(points[1] - points[2])
+                np.linalg.norm(ordered[0] - ordered[3]),  # TL to BL
+                np.linalg.norm(ordered[1] - ordered[2])   # TR to BR
             ))
             
             # Basic size check before expensive operations
             if width < 3 or height < 3:
                 return None
             
-            # Define destination points
+            # Define destination points matching ordered source
             dst_pts = np.array([
-                [0, 0],
-                [width, 0],
-                [width, height],
-                [0, height]
+                [0, 0],           # TL → top-left
+                [width, 0],       # TR → top-right  
+                [width, height],  # BR → bottom-right
+                [0, height]       # BL → bottom-left
             ], dtype=np.float32)
             
             # Get perspective transform
-            M = cv2.getPerspectiveTransform(points, dst_pts)
+            M = cv2.getPerspectiveTransform(ordered, dst_pts)
             
             # Apply transform
             cropped = cv2.warpPerspective(
@@ -610,12 +998,10 @@ class TextExtractor:
                 borderMode=cv2.BORDER_REPLICATE
             )
             
-            # Text is always horizontal - if image is portrait, rotate to landscape
-            if cropped.shape[0] > cropped.shape[1]:  # height > width
-                cropped = cv2.rotate(cropped, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            # No rotation needed - points are already ordered correctly
+            # Text should now be horizontal and right-side up
             
             # Filter out regions that are too small for quality recognition
-            # (applied AFTER rotation to use correct dimensions)
             h, w = cropped.shape[:2]
             # - height < 24: would require >2x upscaling (48/24=2x max)
             # - width < height/2: too narrow for horizontal text
