@@ -252,6 +252,10 @@ def parse_paddle_results(raw_result) -> list:
         
     Returns:
         List of dictionaries with keys: bbox, text, score.
+    
+    Note:
+        PaddleOCR returns dt_polys (all detected boxes) and rec_polys (boxes after 
+        score filtering). We use rec_polys to match with rec_texts/rec_scores.
     """
     results = []
     
@@ -264,11 +268,13 @@ def parse_paddle_results(raw_result) -> list:
             
         rec_texts = res.get('rec_texts', [])
         rec_scores = res.get('rec_scores', [])
-        dt_polys = res.get('dt_polys', [])
+        # Use rec_polys instead of dt_polys for correct mapping
+        # rec_polys contains only boxes that passed the score threshold
+        rec_polys = res.get('rec_polys', res.get('dt_polys', []))
         
         for i, text in enumerate(rec_texts):
             score = rec_scores[i] if i < len(rec_scores) else 0.0
-            bbox = dt_polys[i].tolist() if i < len(dt_polys) else []
+            bbox = rec_polys[i].tolist() if i < len(rec_polys) else []
             
             # Skip empty text
             display_text = str(text).strip() if text else "<None>"

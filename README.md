@@ -102,4 +102,25 @@ output/
 
 ### Benchmark Comparison
 
-Both pipelines include a warm-up phase (2 dummy images) before processing to ensure fair comparison. Results can be analyzed using the `details.csv` files in each output directory.
+Both pipelines include a warm-up phase (2 dummy images) before processing to ensure fair comparison.
+
+#### Run Comparison Script
+
+After running both pipelines, generate comparison summary and charts:
+
+```bash
+python scripts/compare_results.py
+```
+
+This will create:
+- `output/summary.csv` - Detailed comparison statistics
+- `output/summary_chart.png` - Bar chart comparing average time and throughput
+- `output/detailed_chart.png` - Per-image processing time comparison
+
+#### compare_results.py Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--openvino-dir` | Directory containing OpenVINO results | `output/openvino` |
+| `--paddle-dir` | Directory containing PaddleOCR results | `output/paddle` |
+| `--output-dir` | Directory to save comparison results | `output` |
