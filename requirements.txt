@@ -2,8 +2,9 @@
 openvino==2025.4.1
 
 # PaddlePaddle and PaddleOCR (for model conversion)
-paddlepaddle==3.3.0
+paddlepaddle==3.2.2
 paddleocr==3.3.2
+paddlex==3.3.12
 paddle2onnx==2.1.0
 
 # ONNX and optimization tools (auto-installed by paddle2onnx, pinned for reproducibility)
@@ -22,3 +23,7 @@ shapely==2.1.2
 # CLI, logging and utilities
 tqdm==4.67.1
 colored==2.3.1
+
+# Data analysis and visualization
+matplotlib==3.10.0
+pandas==2.2.3

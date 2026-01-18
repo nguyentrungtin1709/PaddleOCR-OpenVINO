@@ -50,25 +50,56 @@ chmod +x scripts/convert_models.sh
 
 ## Usage
 
-### Run OCR on a Single Image
+### Run OpenVINO Pipeline
 
 ```bash
-python scripts/ocr_pipeline.py --image samples/001.png --visualize
+python scripts/ocr_pipeline.py --input-dir samples/ --output-dir output/openvino/ --visualize
 ```
 
-### Run OCR on a Directory of Images
+### Run PaddleOCR Native Pipeline
 
 ```bash
-python scripts/ocr_pipeline.py --input-dir samples --output-dir output --visualize
+python scripts/paddle_pipeline.py --input-dir samples/ --output-dir output/paddle/ --visualize
 ```
 
 ### Parameters
 
+#### ocr_pipeline.py (OpenVINO)
+
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--image` | Path to the image file | - |
+| `--image` | Path to a single image file | - |
 | `--input-dir` | Directory containing input images | `samples` |
 | `--output-dir` | Directory to save results | `output` |
 | `--config` | Path to configuration file | `config/application.json` |
 | `--visualize` | Save images with bounding boxes | `false` |
 | `--verbose` | Display detailed logs | `false` |
+
+#### paddle_pipeline.py (PaddleOCR Native)
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--image` | Path to a single image file | - |
+| `--input-dir` | Directory containing input images | `samples` |
+| `--output-dir` | Directory to save results | `output/paddle` |
+| `--config` | Path to configuration file | `config/paddle.json` |
+| `--visualize` | Save images with bounding boxes | `false` |
+| `--verbose` | Display detailed logs | `false` |
+
+### Output Structure
+
+```
+output/
+├── openvino/           # OpenVINO pipeline results
+│   ├── details.csv     # Timing details (detection_ms, recognition_ms, total_ms)
+│   ├── *_result.json   # OCR results per image
+│   └── *_vis.jpg       # Visualization images
+└── paddle/             # PaddleOCR native results
+    ├── details.csv     # Timing details (total_ms)
+    ├── *_result.json   # OCR results per image
+    └── *_vis.jpg       # Visualization images
+```
+
+### Benchmark Comparison
+
+Both pipelines include a warm-up phase (2 dummy images) before processing to ensure fair comparison. Results can be analyzed using the `details.csv` files in each output directory.

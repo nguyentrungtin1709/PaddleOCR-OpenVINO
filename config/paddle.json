@@ -1,0 +1,75 @@
+{
+    "_description": "PaddleOCR Native Pipeline Configuration",
+    "_note": "Tham số tương đương với application.json để so sánh công bằng",
+    
+    "models": {
+        "_description": "Model names for PaddleOCR 3.x",
+        "textDetectionModelName": "PP-OCRv5_mobile_det",
+        "textRecognitionModelName": "PP-OCRv5_mobile_rec"
+    },
+    
+    "detection": {
+        "_description": "Text detection configuration (DB algorithm)",
+        "textDetLimitType": "max",
+        "_comment_textDetLimitType": "Limit type: 'max' = longest side <= limitSideLen, 'min' = shortest side >= limitSideLen",
+        "textDetLimitSideLen": 640,
+        "_comment_textDetLimitSideLen": "Image side length limit (pixels). Higher value = more detail but slower",
+        "textDetThresh": 0.15,
+        "_comment_textDetThresh": "Pixel detection threshold. Lower = more detections but may include noise",
+        "textDetBoxThresh": 0.15,
+        "_comment_textDetBoxThresh": "Box threshold. Only keep boxes with average score > this value",
+        "textDetUnclipRatio": 2.0,
+        "_comment_textDetUnclipRatio": "Box expansion ratio. Higher = wider boxes"
+    },
+    
+    "recognition": {
+        "_description": "Text recognition configuration",
+        "textRecScoreThresh": 0.3,
+        "_comment_textRecScoreThresh": "Score threshold. Only keep results with score > this value"
+    },
+    
+    "runtime": {
+        "_description": "PaddlePaddle runtime configuration",
+        "lang": "en",
+        "_comment_lang": "Language for OCR: 'en', 'ch', etc.",
+        "device": "cpu",
+        "_comment_device": "Inference device: 'cpu', 'gpu:0', etc.",
+        "cpuThreads": 2,
+        "_comment_cpuThreads": "Number of CPU threads for inference",
+        "enableMkldnn": true,
+        "_comment_enableMkldnn": "Enable MKL-DNN acceleration for CPU",
+        "mkldnnCacheCapacity": 10,
+        "_comment_mkldnnCacheCapacity": "MKL-DNN cache capacity",
+        "precision": "fp32",
+        "_comment_precision": "Inference precision: 'fp32' or 'fp16'"
+    },
+    
+    "pipeline": {
+        "_description": "Pipeline module configuration",
+        "useDocOrientationClassify": false,
+        "_comment_useDocOrientationClassify": "Whether to use document orientation classification",
+        "useDocUnwarping": false,
+        "_comment_useDocUnwarping": "Whether to use document unwarping",
+        "useTextlineOrientation": false,
+        "_comment_useTextlineOrientation": "Whether to use textline orientation classification"
+    },
+    
+    "output": {
+        "_description": "Output configuration",
+        "saveVisualization": true,
+        "_comment_saveVisualization": "Save visualization images with bounding boxes"
+    },
+    
+    "debug": {
+        "_description": "Debug and profiling configuration",
+        "enabled": true,
+        "_comment_enabled": "Enable detailed timing logging to CSV file"
+    },
+    
+    "warmup": {
+        "_description": "Warm-up configuration",
+        "enabled": true,
+        "count": 2,
+        "_comment": "Run dummy images before benchmark to warm up the model"
+    }
+}

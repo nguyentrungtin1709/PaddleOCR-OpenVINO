@@ -14,6 +14,7 @@ import csv
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -286,6 +287,68 @@ def create_extractor(config_loader: ConfigLoader) -> TextExtractor:
     return extractor
 
 
+def create_dummy_images(num_images: int = 2, size: tuple = (640, 480)) -> list:
+    """
+    Create dummy images for warm-up phase.
+    
+    Args:
+        num_images: Number of dummy images to create.
+        size: Image size as (width, height).
+        
+    Returns:
+        List of dummy images as numpy arrays.
+    """
+    dummy_images = []
+    for i in range(num_images):
+        # Create gradient image with some text-like patterns
+        image = np.zeros((size[1], size[0], 3), dtype=np.uint8)
+        
+        # Add gradient background
+        for y in range(size[1]):
+            image[y, :] = [int(255 * y / size[1])] * 3
+        
+        # Add some rectangles to simulate text regions
+        cv2.rectangle(image, (50, 50), (200, 80), (255, 255, 255), -1)
+        cv2.rectangle(image, (50, 100), (250, 130), (200, 200, 200), -1)
+        cv2.rectangle(image, (50, 150), (180, 180), (220, 220, 220), -1)
+        
+        dummy_images.append(image)
+    
+    return dummy_images
+
+
+def run_warmup(
+    extractor: TextExtractor,
+    num_warmup: int = 2
+) -> None:
+    """
+    Run warm-up phase with dummy images.
+    
+    Args:
+        extractor: TextExtractor instance.
+        num_warmup: Number of warm-up iterations.
+    """
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info(f"WARM-UP PHASE: Running {num_warmup} dummy images...")
+    logger.info("=" * 60)
+    
+    dummy_images = create_dummy_images(num_warmup)
+    
+    for i, dummy_image in enumerate(dummy_images, 1):
+        start_time = time.perf_counter()
+        
+        # Run inference on dummy image
+        _ = extractor.extract(dummy_image)
+        
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        logger.info(f"  Warm-up {i}/{num_warmup} completed in {elapsed_ms:.2f} ms")
+    
+    logger.info("Warm-up completed. Starting benchmark...")
+    logger.info("=" * 60)
+    logger.info("")
+
+
 def process_image(
     image_path: Path,
     extractor: TextExtractor,
@@ -397,6 +460,9 @@ def main() -> int:
     
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Run warm-up phase (2 dummy images)
+    run_warmup(extractor, num_warmup=2)
     
     # Initialize CSV writer if debug enabled
     csv_file = None
