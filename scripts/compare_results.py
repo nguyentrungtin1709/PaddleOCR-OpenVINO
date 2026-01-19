@@ -14,7 +14,7 @@ import csv
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -23,6 +23,8 @@ import pandas as pd
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.accuracy_evaluator import AccuracyEvaluator
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +59,19 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="output",
         help="Directory to save comparison results (default: output)"
+    )
+    
+    parser.add_argument(
+        "--samples-dir",
+        type=str,
+        default="samples",
+        help="Directory containing ground truth samples (default: samples)"
+    )
+    
+    parser.add_argument(
+        "--skip-accuracy",
+        action="store_true",
+        help="Skip accuracy evaluation (only compare speed)"
     )
     
     return parser.parse_args()
@@ -347,6 +362,349 @@ def print_summary(openvino_stats: dict, paddle_stats: dict) -> None:
     print()
 
 
+def evaluate_accuracy(
+    samples_dir: Path,
+    openvino_dir: Path,
+    paddle_dir: Path,
+    output_dir: Path
+) -> tuple:
+    """
+    Evaluate accuracy for both pipelines against ground truth.
+    
+    Args:
+        samples_dir: Directory containing ground truth JSON files
+        openvino_dir: Directory containing OpenVINO results
+        paddle_dir: Directory containing PaddleOCR results
+        output_dir: Directory to save accuracy results
+        
+    Returns:
+        Tuple of (openvino_accuracy_df, paddle_accuracy_df, openvino_stats, paddle_stats)
+    """
+    evaluator = AccuracyEvaluator()
+    
+    # Evaluate both pipelines
+    logger.info("Evaluating OpenVINO accuracy...")
+    openvino_accuracy = evaluator.evaluatePipeline(samples_dir, openvino_dir, "OpenVINO")
+    
+    logger.info("Evaluating PaddleOCR accuracy...")
+    paddle_accuracy = evaluator.evaluatePipeline(samples_dir, paddle_dir, "PaddleOCR")
+    
+    # Calculate summary statistics
+    openvino_stats = evaluator.calculateSummaryStatistics(openvino_accuracy)
+    paddle_stats = evaluator.calculateSummaryStatistics(paddle_accuracy)
+    
+    return openvino_accuracy, paddle_accuracy, openvino_stats, paddle_stats
+
+
+def merge_accuracy_to_details(
+    details_df: pd.DataFrame,
+    accuracy_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Merge accuracy results into existing details DataFrame.
+    
+    Args:
+        details_df: Original details DataFrame with timing info
+        accuracy_df: Accuracy evaluation DataFrame
+        
+    Returns:
+        Merged DataFrame with both timing and accuracy columns
+    """
+    if accuracy_df.empty:
+        return details_df
+    
+    # Select accuracy columns (exclude duplicates like filename, pipeline)
+    accuracy_cols = [col for col in accuracy_df.columns 
+                     if col not in ['filename', 'pipeline']]
+    
+    # Merge on filename
+    merged = details_df.merge(
+        accuracy_df[['filename'] + accuracy_cols],
+        on='filename',
+        how='left'
+    )
+    
+    return merged
+
+
+def generate_accuracy_summary_csv(
+    openvino_stats: Dict,
+    paddle_stats: Dict,
+    output_path: Path
+) -> None:
+    """
+    Generate accuracy_summary.csv with comparison statistics.
+    
+    Args:
+        openvino_stats: OpenVINO accuracy statistics
+        paddle_stats: PaddleOCR accuracy statistics
+        output_path: Path to save the CSV file
+    """
+    rows = [
+        ["Metric", "OpenVINO", "PaddleOCR", "Winner"]
+    ]
+    
+    # Number of images
+    ov_num = openvino_stats.get('num_images', 0)
+    pd_num = paddle_stats.get('num_images', 0)
+    rows.append(["Number of Images", ov_num, pd_num, "-"])
+    rows.append(["", "", "", ""])  # Empty row
+    
+    # Field-level statistics
+    fields = ['color', 'productCode', 'size', 'positionQuantity']
+    field_labels = {
+        'color': 'COLOR',
+        'productCode': 'PRODUCT CODE',
+        'size': 'SIZE',
+        'positionQuantity': 'POSITION/QUANTITY'
+    }
+    
+    for field in fields:
+        ov_field = openvino_stats.get('fields', {}).get(field, {})
+        pd_field = paddle_stats.get('fields', {}).get(field, {})
+        
+        ov_exact = ov_field.get('exact_pct', 0)
+        pd_exact = pd_field.get('exact_pct', 0)
+        exact_winner = "OpenVINO" if ov_exact > pd_exact else ("PaddleOCR" if pd_exact > ov_exact else "Tie")
+        
+        ov_accept = ov_field.get('acceptable_pct', 0)
+        pd_accept = pd_field.get('acceptable_pct', 0)
+        accept_winner = "OpenVINO" if ov_accept > pd_accept else ("PaddleOCR" if pd_accept > ov_accept else "Tie")
+        
+        ov_score = ov_field.get('avg_score', 0)
+        pd_score = pd_field.get('avg_score', 0)
+        score_winner = "OpenVINO" if ov_score > pd_score else ("PaddleOCR" if pd_score > ov_score else "Tie")
+        
+        rows.append([f"=== {field_labels[field]} ===", "", "", ""])
+        rows.append([f"  Exact Match (%)", f"{ov_exact:.1f}%", f"{pd_exact:.1f}%", exact_winner])
+        rows.append([f"  Acceptable (>=0.90) (%)", f"{ov_accept:.1f}%", f"{pd_accept:.1f}%", accept_winner])
+        rows.append([f"  Avg Score", f"{ov_score:.3f}", f"{pd_score:.3f}", score_winner])
+        rows.append(["", "", "", ""])
+    
+    # Overall statistics
+    ov_overall = openvino_stats.get('overall', {})
+    pd_overall = paddle_stats.get('overall', {})
+    
+    ov_avg = ov_overall.get('avg_score', 0)
+    pd_avg = pd_overall.get('avg_score', 0)
+    avg_winner = "OpenVINO" if ov_avg > pd_avg else ("PaddleOCR" if pd_avg > ov_avg else "Tie")
+    
+    ov_all_exact = ov_overall.get('all_exact_pct', 0)
+    pd_all_exact = pd_overall.get('all_exact_pct', 0)
+    all_exact_winner = "OpenVINO" if ov_all_exact > pd_all_exact else ("PaddleOCR" if pd_all_exact > ov_all_exact else "Tie")
+    
+    ov_all_accept = ov_overall.get('all_acceptable_pct', 0)
+    pd_all_accept = pd_overall.get('all_acceptable_pct', 0)
+    all_accept_winner = "OpenVINO" if ov_all_accept > pd_all_accept else ("PaddleOCR" if pd_all_accept > ov_all_accept else "Tie")
+    
+    rows.append(["=== OVERALL ===", "", "", ""])
+    rows.append(["  Average Score", f"{ov_avg:.3f}", f"{pd_avg:.3f}", avg_winner])
+    rows.append(["  All Fields Exact (%)", f"{ov_all_exact:.1f}%", f"{pd_all_exact:.1f}%", all_exact_winner])
+    rows.append(["  All Fields Acceptable (%)", f"{ov_all_accept:.1f}%", f"{pd_all_accept:.1f}%", all_accept_winner])
+    
+    # Save CSV
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+    
+    logger.info(f"Accuracy summary saved to: {output_path}")
+
+
+def print_accuracy_summary(openvino_stats: Dict, paddle_stats: Dict) -> None:
+    """
+    Print accuracy comparison summary to console.
+    
+    Args:
+        openvino_stats: OpenVINO accuracy statistics
+        paddle_stats: PaddleOCR accuracy statistics
+    """
+    print()
+    print("=" * 75)
+    print(" ACCURACY COMPARISON SUMMARY ".center(75, "="))
+    print("=" * 75)
+    print()
+    print(f"{'Metric':<35} {'OpenVINO':>12} {'PaddleOCR':>12} {'Winner':>12}")
+    print("-" * 75)
+    
+    # Number of images
+    ov_num = openvino_stats.get('num_images', 0)
+    pd_num = paddle_stats.get('num_images', 0)
+    print(f"{'Images Evaluated':<35} {ov_num:>12} {pd_num:>12} {'-':>12}")
+    print("=" * 75)
+    
+    # Field-level statistics
+    fields = ['color', 'productCode', 'size', 'positionQuantity']
+    field_labels = {
+        'color': 'COLOR',
+        'productCode': 'PRODUCT CODE',
+        'size': 'SIZE',
+        'positionQuantity': 'POSITION/QUANTITY'
+    }
+    
+    for field in fields:
+        ov_field = openvino_stats.get('fields', {}).get(field, {})
+        pd_field = paddle_stats.get('fields', {}).get(field, {})
+        
+        print(f"{field_labels[field]}:")
+        
+        # Exact match
+        ov_exact = ov_field.get('exact_pct', 0)
+        pd_exact = pd_field.get('exact_pct', 0)
+        winner = "OpenVINO" if ov_exact > pd_exact else ("PaddleOCR" if pd_exact > ov_exact else "Tie")
+        print(f"{'  - Exact Match (%)':<35} {ov_exact:>11.1f}% {pd_exact:>11.1f}% {winner:>12}")
+        
+        # Acceptable
+        ov_accept = ov_field.get('acceptable_pct', 0)
+        pd_accept = pd_field.get('acceptable_pct', 0)
+        winner = "OpenVINO" if ov_accept > pd_accept else ("PaddleOCR" if pd_accept > ov_accept else "Tie")
+        print(f"{'  - Acceptable (>=0.90)':<35} {ov_accept:>11.1f}% {pd_accept:>11.1f}% {winner:>12}")
+        
+        # Average score
+        ov_score = ov_field.get('avg_score', 0)
+        pd_score = pd_field.get('avg_score', 0)
+        winner = "OpenVINO" if ov_score > pd_score else ("PaddleOCR" if pd_score > ov_score else "Tie")
+        print(f"{'  - Average Score':<35} {ov_score:>12.3f} {pd_score:>12.3f} {winner:>12}")
+        
+        print("-" * 75)
+    
+    # Overall
+    ov_overall = openvino_stats.get('overall', {})
+    pd_overall = paddle_stats.get('overall', {})
+    
+    print("OVERALL:")
+    
+    ov_avg = ov_overall.get('avg_score', 0)
+    pd_avg = pd_overall.get('avg_score', 0)
+    winner = "OpenVINO" if ov_avg > pd_avg else ("PaddleOCR" if pd_avg > ov_avg else "Tie")
+    print(f"{'  - Average Score':<35} {ov_avg:>12.3f} {pd_avg:>12.3f} {winner:>12}")
+    
+    ov_all_exact = ov_overall.get('all_exact_pct', 0)
+    pd_all_exact = pd_overall.get('all_exact_pct', 0)
+    winner = "OpenVINO" if ov_all_exact > pd_all_exact else ("PaddleOCR" if pd_all_exact > ov_all_exact else "Tie")
+    print(f"{'  - All Fields Exact':<35} {ov_all_exact:>11.1f}% {pd_all_exact:>11.1f}% {winner:>12}")
+    
+    ov_all_accept = ov_overall.get('all_acceptable_pct', 0)
+    pd_all_accept = pd_overall.get('all_acceptable_pct', 0)
+    winner = "OpenVINO" if ov_all_accept > pd_all_accept else ("PaddleOCR" if pd_all_accept > ov_all_accept else "Tie")
+    print(f"{'  - All Fields Acceptable':<35} {ov_all_accept:>11.1f}% {pd_all_accept:>11.1f}% {winner:>12}")
+    
+    print("=" * 75)
+    
+    # Winner announcement
+    if ov_avg > pd_avg:
+        diff = (ov_avg - pd_avg) * 100
+        print(f"\n>>> OpenVINO has {diff:.1f}% higher accuracy than PaddleOCR <<<")
+    elif pd_avg > ov_avg:
+        diff = (pd_avg - ov_avg) * 100
+        print(f"\n>>> PaddleOCR has {diff:.1f}% higher accuracy than OpenVINO <<<")
+    else:
+        print(f"\n>>> Both pipelines have equal accuracy <<<")
+    
+    print()
+
+
+def generate_accuracy_chart(
+    openvino_stats: Dict,
+    paddle_stats: Dict,
+    output_path: Path
+) -> None:
+    """
+    Generate accuracy comparison bar chart.
+    
+    Args:
+        openvino_stats: OpenVINO accuracy statistics
+        paddle_stats: PaddleOCR accuracy statistics
+        output_path: Path to save the chart
+    """
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    colors = ['#2E86AB', '#A23B72']  # Blue for OpenVINO, Pink for PaddleOCR
+    
+    # Chart 1: Average Score by Field
+    ax1 = axes[0]
+    fields = ['color', 'productCode', 'size', 'positionQuantity']
+    field_labels = ['Color', 'Product\nCode', 'Size', 'Position/\nQuantity']
+    
+    x = np.arange(len(fields))
+    width = 0.35
+    
+    ov_scores = [openvino_stats.get('fields', {}).get(f, {}).get('avg_score', 0) for f in fields]
+    pd_scores = [paddle_stats.get('fields', {}).get(f, {}).get('avg_score', 0) for f in fields]
+    
+    bars1 = ax1.bar(x - width/2, ov_scores, width, label='OpenVINO', color=colors[0], edgecolor='black')
+    bars2 = ax1.bar(x + width/2, pd_scores, width, label='PaddleOCR', color=colors[1], edgecolor='black')
+    
+    ax1.set_ylabel('Average Score', fontsize=12)
+    ax1.set_title('Accuracy by Field', fontsize=14, fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(field_labels)
+    ax1.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0))
+    ax1.set_ylim(0, 1.2)
+    
+    # Add value labels
+    for bar in bars1:
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                f'{height:.2f}', ha='center', va='bottom', fontsize=9)
+    for bar in bars2:
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                f'{height:.2f}', ha='center', va='bottom', fontsize=9)
+    
+    # Chart 2: Overall Metrics
+    ax2 = axes[1]
+    metrics = ['Avg Score', 'All Exact (%)', 'All Acceptable (%)']
+    
+    ov_overall = openvino_stats.get('overall', {})
+    pd_overall = paddle_stats.get('overall', {})
+    
+    # Normalize percentages to 0-1 scale for comparison
+    ov_values = [
+        ov_overall.get('avg_score', 0),
+        ov_overall.get('all_exact_pct', 0) / 100,
+        ov_overall.get('all_acceptable_pct', 0) / 100
+    ]
+    pd_values = [
+        pd_overall.get('avg_score', 0),
+        pd_overall.get('all_exact_pct', 0) / 100,
+        pd_overall.get('all_acceptable_pct', 0) / 100
+    ]
+    
+    x2 = np.arange(len(metrics))
+    
+    bars3 = ax2.bar(x2 - width/2, ov_values, width, label='OpenVINO', color=colors[0], edgecolor='black')
+    bars4 = ax2.bar(x2 + width/2, pd_values, width, label='PaddleOCR', color=colors[1], edgecolor='black')
+    
+    ax2.set_ylabel('Score / Percentage', fontsize=12)
+    ax2.set_title('Overall Accuracy Metrics', fontsize=14, fontweight='bold')
+    ax2.set_xticks(x2)
+    ax2.set_xticklabels(metrics)
+    ax2.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0))
+    ax2.set_ylim(0, 1.2)
+    
+    # Add value labels
+    for i, bar in enumerate(bars3):
+        height = bar.get_height()
+        label = f'{height:.2f}' if i == 0 else f'{height*100:.1f}%'
+        ax2.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                label, ha='center', va='bottom', fontsize=9)
+    for i, bar in enumerate(bars4):
+        height = bar.get_height()
+        label = f'{height:.2f}' if i == 0 else f'{height*100:.1f}%'
+        ax2.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                label, ha='center', va='bottom', fontsize=9)
+    
+    plt.tight_layout()
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    logger.info(f"Accuracy chart saved to: {output_path}")
+
+
 def main() -> int:
     """Main entry point."""
     args = parse_args()
@@ -355,6 +713,7 @@ def main() -> int:
     openvino_dir = Path(args.openvino_dir)
     paddle_dir = Path(args.paddle_dir)
     output_dir = Path(args.output_dir)
+    samples_dir = Path(args.samples_dir)
     
     if not openvino_dir.is_absolute():
         openvino_dir = PROJECT_ROOT / openvino_dir
@@ -362,30 +721,66 @@ def main() -> int:
         paddle_dir = PROJECT_ROOT / paddle_dir
     if not output_dir.is_absolute():
         output_dir = PROJECT_ROOT / output_dir
+    if not samples_dir.is_absolute():
+        samples_dir = PROJECT_ROOT / samples_dir
     
     logger.info(f"OpenVINO results: {openvino_dir}")
     logger.info(f"PaddleOCR results: {paddle_dir}")
+    logger.info(f"Samples directory: {samples_dir}")
     logger.info(f"Output directory: {output_dir}")
     
     try:
-        # Load data
+        # Load data from pipeline output (details.csv - original name)
         openvino_df = load_openvino_details(openvino_dir / "details.csv")
         paddle_df = load_paddle_details(paddle_dir / "details.csv")
         
         logger.info(f"Loaded {len(openvino_df)} OpenVINO results")
         logger.info(f"Loaded {len(paddle_df)} PaddleOCR results")
         
-        # Calculate statistics
+        # Calculate speed statistics
         openvino_stats = calculate_statistics(openvino_df, "OpenVINO")
         paddle_stats = calculate_statistics(paddle_df, "PaddleOCR")
         
-        # Generate outputs
-        generate_summary_csv(openvino_stats, paddle_stats, output_dir / "summary.csv")
-        generate_bar_chart(openvino_stats, paddle_stats, output_dir / "summary_chart.png")
-        generate_detailed_chart(openvino_df, paddle_df, output_dir / "detailed_chart.png")
+        # Generate speed comparison outputs
+        generate_summary_csv(openvino_stats, paddle_stats, output_dir / "speed_summary.csv")
+        generate_bar_chart(openvino_stats, paddle_stats, output_dir / "speed_summary_chart.png")
+        generate_detailed_chart(openvino_df, paddle_df, output_dir / "speed_detailed_chart.png")
         
-        # Print summary
+        # Print speed summary
         print_summary(openvino_stats, paddle_stats)
+        
+        # Evaluate accuracy (unless skipped)
+        if not args.skip_accuracy:
+            if samples_dir.exists():
+                logger.info("Starting accuracy evaluation...")
+                
+                # Evaluate accuracy
+                ov_accuracy, pd_accuracy, ov_acc_stats, pd_acc_stats = evaluate_accuracy(
+                    samples_dir, openvino_dir, paddle_dir, output_dir
+                )
+                
+                # Merge accuracy into details and save to output dir with prefix
+                if not ov_accuracy.empty:
+                    openvino_merged = merge_accuracy_to_details(openvino_df, ov_accuracy)
+                    openvino_merged.to_csv(output_dir / "openvino_details.csv", index=False)
+                    logger.info(f"Saved openvino_details.csv to output directory")
+                
+                if not pd_accuracy.empty:
+                    paddle_merged = merge_accuracy_to_details(paddle_df, pd_accuracy)
+                    paddle_merged.to_csv(output_dir / "paddle_details.csv", index=False)
+                    logger.info(f"Saved paddle_details.csv to output directory")
+                
+                # Generate accuracy summary
+                generate_accuracy_summary_csv(ov_acc_stats, pd_acc_stats, output_dir / "accuracy_summary.csv")
+                generate_accuracy_chart(ov_acc_stats, pd_acc_stats, output_dir / "accuracy_summary_chart.png")
+                
+                # Print accuracy summary
+                print_accuracy_summary(ov_acc_stats, pd_acc_stats)
+            else:
+                logger.warning(f"Samples directory not found: {samples_dir}")
+                logger.warning("Skipping accuracy evaluation")
+        else:
+            logger.info("Skipping accuracy evaluation (--skip-accuracy flag)")
         
         logger.info("Comparison completed successfully!")
         return 0
